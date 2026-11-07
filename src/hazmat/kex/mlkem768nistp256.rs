@@ -29,14 +29,14 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::boxed::{BoxedEcdhPrivateKey, BoxedEcdsaPublicKey};
-use purecrypto::ec::curves::CurveId;
-use purecrypto::hash::{Digest, Sha256};
-use purecrypto::mlkem::{
+use crate::crypto::ec::CurveId;
+use crate::crypto::ec::{EcdhPrivateKey, EcdsaPublicKey};
+use crate::crypto::hash::{Digest, Sha256};
+use crate::crypto::mlkem::{
     MlKem768Ciphertext, MlKem768DecapsKey, MlKem768EncapsKey, SHARED_SECRET_BYTES,
 };
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::Kex;
 use super::common::{
@@ -80,7 +80,7 @@ impl MlKem768Nistp256Sha256 {
 /// Client-side state retained between `client_init` and `client_finish`.
 pub struct ClientState {
     /// P-256 ephemeral secret matching the point embedded in `c_init`.
-    ec_secret: BoxedEcdhPrivateKey,
+    ec_secret: EcdhPrivateKey,
     /// ML-KEM-768 decapsulation key matching the EK embedded in `c_init`.
     pq_secret: MlKem768DecapsKey,
     /// The exact 1249-byte `C_INIT` blob sent on the wire.
@@ -118,8 +118,8 @@ fn k_string_bytes(k: &[u8; 32]) -> Vec<u8> {
 
 /// The raw P-256 agreement of `secret` with the uncompressed point `peer`
 /// (validated on the curve), as a 32-byte X-coordinate.
-fn p256_agree(secret: &BoxedEcdhPrivateKey, peer: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let peer = BoxedEcdsaPublicKey::from_sec1(CurveId::P256, peer)
+fn p256_agree(secret: &EcdhPrivateKey, peer: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let peer = EcdsaPublicKey::from_sec1(CurveId::P256, peer)
         .map_err(|_| Error::Format("invalid hybrid ECDH point"))?;
     Ok(Zeroizing::new(secret.diffie_hellman(&peer).map_err(
         |_| Error::Crypto("hybrid KEX agreement failed"),
@@ -150,7 +150,7 @@ fn exchange_hash(
 fn client_init_with(
     pq_secret: MlKem768DecapsKey,
     pq_public: &MlKem768EncapsKey,
-    ec_secret: BoxedEcdhPrivateKey,
+    ec_secret: EcdhPrivateKey,
 ) -> (ClientState, KexInitOut) {
     let mut c_init = Vec::with_capacity(C_INIT_LEN);
     c_init.extend_from_slice(&pq_public.to_bytes());
@@ -176,7 +176,7 @@ fn client_init_with(
 /// supplied (randomly in [`MlKem768Nistp256Sha256::server_reply`], fixed in
 /// the known-answer test).
 fn server_reply_with<S, E>(
-    ec_secret: BoxedEcdhPrivateKey,
+    ec_secret: EcdhPrivateKey,
     encapsulate: E,
     init_payload: &[u8],
     host_key: &S,
@@ -237,7 +237,7 @@ impl MlKem768Nistp256Sha256 {
     /// Generate the client's ephemerals (P-256 + ML-KEM-768) and produce
     /// the `SSH_MSG_KEX_HYBRID_INIT` payload.
     pub fn client_init<R: RngCore + CryptoRng>(rng: &mut R) -> (ClientState, KexInitOut) {
-        let ec_secret = BoxedEcdhPrivateKey::generate(CurveId::P256, rng);
+        let ec_secret = EcdhPrivateKey::generate(CurveId::P256, rng);
         let (pq_secret, pq_public) = MlKem768DecapsKey::generate(rng);
         client_init_with(pq_secret, &pq_public, ec_secret)
     }
@@ -256,7 +256,7 @@ impl MlKem768Nistp256Sha256 {
         R: RngCore + CryptoRng,
         S: crate::hostkey::HostKey + ?Sized,
     {
-        let ec_secret = BoxedEcdhPrivateKey::generate(CurveId::P256, rng);
+        let ec_secret = EcdhPrivateKey::generate(CurveId::P256, rng);
         server_reply_with(
             ec_secret,
             |ek| ek.encapsulate(rng),
@@ -311,8 +311,8 @@ impl MlKem768Nistp256Sha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::rng::HmacDrbg;
     use crate::hostkey::{Ed25519HostKey, HostKey};
-    use purecrypto::rng::HmacDrbg;
 
     const V_C: &[u8] = b"SSH-2.0-OpenSSH_10.6";
     const V_S: &[u8] = b"SSH-2.0-puressh_test";
@@ -390,9 +390,9 @@ mod tests {
         let verifier = Ed25519HostKey::from_public(host_key.public_bytes());
 
         let (pq_secret, pq_public) = MlKem768DecapsKey::from_seeds(&d, &z);
-        let ec_client = BoxedEcdhPrivateKey::from_bytes(CurveId::P256, &client_scalar).unwrap();
+        let ec_client = EcdhPrivateKey::from_bytes(CurveId::P256, &client_scalar).unwrap();
         let (state, init) = client_init_with(pq_secret, &pq_public, ec_client);
-        let ec_server = BoxedEcdhPrivateKey::from_bytes(CurveId::P256, &server_scalar).unwrap();
+        let ec_server = EcdhPrivateKey::from_bytes(CurveId::P256, &server_scalar).unwrap();
         let reply = server_reply_with(
             ec_server,
             |ek| ek.encapsulate_deterministic(&m),

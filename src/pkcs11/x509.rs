@@ -2,8 +2,8 @@
 //! subject as OpenSSL's `X509_NAME_oneline` prints it (OpenSSH labels
 //! certificate keys with it).
 
+use crate::crypto::der::Reader;
 use alloc::string::String;
-use purecrypto::der::Reader;
 
 const TAG_SEQUENCE: u8 = 0x30;
 const TAG_SET: u8 = 0x31;
@@ -51,7 +51,7 @@ fn short_name(oid: &[u8]) -> String {
         _ => "",
     };
     if name.is_empty() {
-        purecrypto::der::oid_to_string(oid).unwrap_or_default()
+        crate::crypto::der::oid_to_string(oid).unwrap_or_default()
     } else {
         name.into()
     }

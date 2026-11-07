@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use purecrypto::ec::x25519::X25519PrivateKey;
-use purecrypto::rng::{OsRng, RngCore};
+use crate::crypto::ec::X25519PrivateKey;
+use crate::crypto::rng::{OsRng, RngCore};
 
 use super::wire::{self, Accept, Knock, KnockFields, MAX_DATAGRAM};
 use super::*;

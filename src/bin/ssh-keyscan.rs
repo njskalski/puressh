@@ -361,7 +361,7 @@ fn print_key(o: &Opts, names: &[&str], key_type: &str, blob: &[u8], out: &mut im
     } else {
         names.to_vec()
     };
-    let b64 = purecrypto::der::base64_encode(blob);
+    let b64 = puressh::crypto::der::base64_encode(blob);
     for host in hosts {
         let line = if o.sshfp {
             sshfp_lines(host, blob, o.sshfp_hash)
@@ -386,7 +386,7 @@ fn print_key(o: &Opts, names: &[&str], key_type: &str, blob: &[u8], out: &mut im
 /// `host IN SSHFP alg fptype digest` lines (SHA-1 and SHA-256, or the one
 /// `-O hashalg=` names); none for a key type without an SSHFP number.
 fn sshfp_lines(host: &str, blob: &[u8], only: Option<u8>) -> String {
-    use purecrypto::hash::{Digest, Sha1, Sha256};
+    use puressh::crypto::hash::{Digest, Sha1, Sha256};
     let Some(alg) = puressh::key::PublicKey::parse_wire_blob(blob)
         .ok()
         .and_then(|k| k.sshfp_algorithm())
@@ -395,8 +395,8 @@ fn sshfp_lines(host: &str, blob: &[u8], only: Option<u8>) -> String {
     };
     let mut out = String::new();
     for (fptype, digest) in [
-        (1u8, Sha1::digest(blob).as_ref().to_vec()),
-        (2, Sha256::digest(blob).as_ref().to_vec()),
+        (1u8, Sha1::digest(blob).to_vec()),
+        (2, Sha256::digest(blob).to_vec()),
     ] {
         if only.is_some_and(|o| o != fptype) {
             continue;

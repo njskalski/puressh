@@ -554,12 +554,12 @@ mod tests {
 
     use crate::auth::{AuthAttempt, AuthDecision, Authenticator};
     use crate::client::Config;
+    use crate::crypto::rng::{OsRng, RngCore};
     use crate::hostkey::{Ed25519HostKey, HostKey};
     use crate::server::{
         AuthenticatorFactory, CommandHandler, Config as ServerConfig, ExecResult, Server,
         SessionEnv,
     };
-    use purecrypto::rng::{OsRng, RngCore};
 
     struct OneKeyAuth {
         user: String,

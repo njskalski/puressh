@@ -221,9 +221,9 @@ impl Agent {
     pub fn add_identity(&mut self, key: &crate::key::PrivateKey) -> Result<()> {
         // Both the request body and the framed message carry the cleartext
         // private key; wipe them once written.
-        let body = purecrypto::zeroize::Zeroizing::new(key.to_agent_add_body());
+        let body = crate::crypto::zeroize::Zeroizing::new(key.to_agent_add_body());
         let frame =
-            purecrypto::zeroize::Zeroizing::new(encode_message(SSH_AGENTC_ADD_IDENTITY, &body));
+            crate::crypto::zeroize::Zeroizing::new(encode_message(SSH_AGENTC_ADD_IDENTITY, &body));
         self.write_frame(&frame)?;
         let (msg_type, _) = self.read_frame()?;
         match msg_type {
@@ -240,10 +240,10 @@ impl Agent {
         key: &crate::key::PrivateKey,
         lifetime: u32,
     ) -> Result<()> {
-        let mut body = purecrypto::zeroize::Zeroizing::new(key.to_agent_add_body());
+        let mut body = crate::crypto::zeroize::Zeroizing::new(key.to_agent_add_body());
         body.push(SSH_AGENT_CONSTRAIN_LIFETIME);
         body.extend_from_slice(&lifetime.to_be_bytes());
-        let frame = purecrypto::zeroize::Zeroizing::new(encode_message(
+        let frame = crate::crypto::zeroize::Zeroizing::new(encode_message(
             SSH_AGENTC_ADD_ID_CONSTRAINED,
             &body,
         ));
@@ -274,7 +274,7 @@ impl Agent {
         cert_blob: Option<&[u8]>,
         c: &AddConstraints,
     ) -> Result<()> {
-        let mut body = purecrypto::zeroize::Zeroizing::new(match cert_blob {
+        let mut body = crate::crypto::zeroize::Zeroizing::new(match cert_blob {
             Some(cert) => key.to_agent_add_cert_body(cert),
             None => key.to_agent_add_body(),
         });
@@ -288,7 +288,7 @@ impl Agent {
         } else {
             SSH_AGENTC_ADD_IDENTITY
         };
-        let frame = purecrypto::zeroize::Zeroizing::new(encode_message(msg_type, &body));
+        let frame = crate::crypto::zeroize::Zeroizing::new(encode_message(msg_type, &body));
         self.simple_request(&frame, "add-identity")
     }
 
@@ -304,13 +304,13 @@ impl Agent {
         certs: &[Vec<u8>],
         cert_only: bool,
     ) -> Result<()> {
-        let mut body = purecrypto::zeroize::Zeroizing::new(Vec::new());
+        let mut body = crate::crypto::zeroize::Zeroizing::new(Vec::new());
         let mut w = crate::format::Writer::new();
         w.write_string(provider.as_bytes());
         w.write_string(pin.as_bytes());
         body.extend_from_slice(w.as_slice());
         let mut wiped = w.into_vec();
-        purecrypto::zeroize::Zeroize::zeroize(&mut wiped);
+        crate::crypto::zeroize::Zeroize::zeroize(&mut wiped);
         let constrained = encode_constraints(
             &mut body,
             c,
@@ -322,7 +322,7 @@ impl Agent {
         } else {
             super::protocol::SSH_AGENTC_ADD_SMARTCARD_KEY
         };
-        let frame = purecrypto::zeroize::Zeroizing::new(encode_message(msg_type, &body));
+        let frame = crate::crypto::zeroize::Zeroizing::new(encode_message(msg_type, &body));
         self.simple_request(&frame, "add-smartcard")
     }
 
@@ -380,7 +380,7 @@ impl Agent {
         let mut w = crate::format::Writer::new();
         w.write_string(passphrase);
         let frame =
-            purecrypto::zeroize::Zeroizing::new(encode_message(SSH_AGENTC_LOCK, w.as_slice()));
+            crate::crypto::zeroize::Zeroizing::new(encode_message(SSH_AGENTC_LOCK, w.as_slice()));
         self.simple_request(&frame, "lock")
     }
 
@@ -389,7 +389,7 @@ impl Agent {
         let mut w = crate::format::Writer::new();
         w.write_string(passphrase);
         let frame =
-            purecrypto::zeroize::Zeroizing::new(encode_message(SSH_AGENTC_UNLOCK, w.as_slice()));
+            crate::crypto::zeroize::Zeroizing::new(encode_message(SSH_AGENTC_UNLOCK, w.as_slice()));
         self.simple_request(&frame, "unlock")
     }
 

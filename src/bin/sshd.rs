@@ -170,7 +170,7 @@ mod imp {
         use std::thread::JoinHandle;
 
         use crate::sshd_pam::{Context, ConversationHandler, NullConversation};
-        use purecrypto::zeroize::Zeroizing;
+        use puressh::crypto::zeroize::Zeroizing;
 
         /// One step of a live keyboard-interactive PAM conversation, returned
         /// by [`KbdConversation::next`].
@@ -647,7 +647,10 @@ mod imp {
                 self.done = true;
                 KbdStep::Done(false)
             }
-            pub fn answer(&mut self, _response: purecrypto::zeroize::Zeroizing<Vec<u8>>) -> bool {
+            pub fn answer(
+                &mut self,
+                _response: puressh::crypto::zeroize::Zeroizing<Vec<u8>>,
+            ) -> bool {
                 let _ = self.done;
                 false
             }
@@ -675,7 +678,7 @@ mod imp {
             pub fn pam_check_password(
                 &self,
                 _user: &str,
-                _password: purecrypto::zeroize::Zeroizing<Vec<u8>>,
+                _password: puressh::crypto::zeroize::Zeroizing<Vec<u8>>,
                 _rhost: Option<&str>,
             ) -> puressh::Result<()> {
                 Err(puressh::Error::Io(std::io::Error::other(
@@ -977,7 +980,7 @@ mod imp {
     fn choose_dh(
         path: &str,
         req: puressh::hazmat::kex::dh::GexRequest,
-    ) -> Option<purecrypto::dh::DhGroup> {
+    ) -> Option<puressh::crypto::dh::DhGroup> {
         use puressh::hazmat::kex::dh::{choose_moduli, fallback_gex_group, parse_moduli};
         let entries = MODULI.get_or_init(|| match std::fs::read_to_string(path) {
             Ok(text) => Some(parse_moduli(&text)),
@@ -993,8 +996,8 @@ mod imp {
             return Some(fallback_gex_group(req.max));
         };
         let pick = |n: usize| {
-            use purecrypto::rng::RngCore;
-            (purecrypto::rng::OsRng.next_u64() % n as u64) as usize
+            use puressh::crypto::rng::RngCore;
+            (puressh::crypto::rng::OsRng.next_u64() % n as u64) as usize
         };
         match choose_moduli(entries, req, pick).and_then(|e| e.group()) {
             Some(group) => Some(group),
@@ -3018,8 +3021,8 @@ mod imp {
     /// `MD5:` and colon-separated hex, or the digest's name and unpadded
     /// base64 (`SHA256:…`).
     fn fingerprint(blob: &[u8]) -> String {
-        use purecrypto::hash::{Digest, Md5, Sha1, Sha256, Sha384, Sha512};
         use puressh::config::server::FingerprintHash as H;
+        use puressh::crypto::hash::{Digest, Md5, Sha1, Sha256, Sha384, Sha512};
         let hash = *FINGERPRINT_HASH.get().unwrap_or(&H::Sha256);
         let digest = match hash {
             H::Md5 => {
@@ -3034,7 +3037,7 @@ mod imp {
             H::Sha512 => Sha512::digest(blob).to_vec(),
             _ => Sha256::digest(blob).to_vec(),
         };
-        let b64 = purecrypto::der::base64_encode(&digest);
+        let b64 = puressh::crypto::der::base64_encode(&digest);
         format!("{}:{}", hash.name(), b64.trim_end_matches('='))
     }
 
@@ -3049,7 +3052,7 @@ mod imp {
             .and_then(|t| std::str::from_utf8(t).ok())
             .unwrap_or("")
             .to_string();
-        (fp, purecrypto::der::base64_encode(blob), kind)
+        (fp, puressh::crypto::der::base64_encode(blob), kind)
     }
 
     /// The tokens every authorization command knows: `%C` (client address
@@ -4416,7 +4419,7 @@ mod imp {
             &mut self,
             user: &str,
             method: &'static str,
-            password: purecrypto::zeroize::Zeroizing<Vec<u8>>,
+            password: puressh::crypto::zeroize::Zeroizing<Vec<u8>>,
         ) -> AuthDecision {
             // Mid-userauth username change ⇒ reject (don't leak which half
             // failed).
@@ -5028,7 +5031,8 @@ mod imp {
                         // Copy the secret bytes into a zeroize-on-drop buffer; the
                         // source `SecretString` is itself zeroizing and drops at the
                         // end of this arm.
-                        let pw = purecrypto::zeroize::Zeroizing::new(password.as_bytes().to_vec());
+                        let pw =
+                            puressh::crypto::zeroize::Zeroizing::new(password.as_bytes().to_vec());
                         self.verify_password(&user, "password", pw)
                     }
                     AuthAttempt::KeyboardInteractive { user, .. } => {
@@ -5095,7 +5099,7 @@ mod imp {
                 // the answer into a zeroizing buffer first.
                 let answer = responses
                     .first()
-                    .map(|s| purecrypto::zeroize::Zeroizing::new(s.as_bytes().to_vec()))
+                    .map(|s| puressh::crypto::zeroize::Zeroizing::new(s.as_bytes().to_vec()))
                     .unwrap_or_default();
 
                 // Empty-password policy: refuse an empty answer to the first prompt
@@ -5486,7 +5490,7 @@ mod imp {
     /// OpenSSH's `hostname_hash`: the host name's SHA-512 in its
     /// presentation characters, `len` of them.
     fn hostname_hash(len: usize) -> String {
-        use purecrypto::hash::{Digest, Sha512};
+        use puressh::crypto::hash::{Digest, Sha512};
         const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         Sha512::digest(host_name().as_bytes())
             .iter()
@@ -8822,7 +8826,7 @@ mod imp {
                 } else {
                     100
                 };
-                use purecrypto::rng::{OsRng, RngCore};
+                use puressh::crypto::rng::{OsRng, RngCore};
                 if (OsRng.next_u32() % 100) < p as u32 {
                     return Err("max-startups (early drop)");
                 }

@@ -7,10 +7,11 @@
 
 A pure-Rust [SSH](https://datatracker.ietf.org/doc/html/rfc4251) (Secure Shell)
 protocol library and CLI suite, in the spirit of [libssh](https://www.libssh.org/),
-built on [`purecrypto`](https://crates.io/crates/purecrypto) for every
-cryptographic primitive. No C dependencies, no FFI in the dependency tree, and
-no `unsafe` in the library itself (the optional `ffi` feature is the only place
-`unsafe` appears, for the C ABI surface).
+built on the [RustCrypto](https://github.com/RustCrypto) crates and the
+dalek curves for every cryptographic primitive. No C dependencies, no FFI in
+the dependency tree, and no `unsafe` in the library itself (the optional
+`ffi`, `security-key` and `pkcs11` features are the only places `unsafe`
+appears, for the C ABI surface and for loading provider libraries at run time).
 
 > **Status: functional, pre-1.0.** Client, server, SFTP, SCP, port/agent/X11
 > and Unix-socket (StreamLocal) forwarding, `known_hosts`, and `ssh_config`
@@ -78,8 +79,11 @@ cargo add puressh --features server
 
 ## Goals
 
-- **Pure Rust, no FFI deps.** Crypto comes from `purecrypto`; networking comes
-  from `std::net`. Nothing links C.
+- **Pure Rust, no FFI deps.** Crypto comes from the RustCrypto crates (`sha2`,
+  `aes`, `chacha20`, `p256`, `rsa`, `ml-kem`, ...) and `x25519-dalek` /
+  `ed25519-dalek`, the most widely used and reviewed pure-Rust
+  implementations, compiled from their portable code paths (see
+  `.cargo/config.toml`); networking comes from `std::net`. Nothing links C.
 - **`no_std` friendly.** The protocol core (packet codec, KEX, cipher/MAC
   adapters, key parsing) builds without `std`; only the convenience I/O and the
   client/server/CLI layers require it.
@@ -280,7 +284,7 @@ where OpenSSH isolates them in `ssh-sk-helper` / `ssh-pkcs11-helper`.
 ## Security
 
 This is pre-1.0 software that has not had an independent third-party audit.
-It is built on `purecrypto` and has been the subject of internal security-review
+Its cryptography is the RustCrypto crates' and it has been the subject of internal security-review
 passes (host-key trust handling, forwarding default-deny policies, SFTP jail
 hardening, secret zeroization, DoS caps). Use the strict `known_hosts` policy
 (`Config::with_known_hosts`) in anything that matters, and review before

@@ -233,7 +233,7 @@ mod tests {
     static GATE_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn sample_rsa_public_blob() -> Vec<u8> {
-        use purecrypto::bignum::BoxedUint;
+        use crate::crypto::bignum::BoxedUint;
         let mut n_bytes = alloc::vec![0u8; 256];
         n_bytes[0] = 0xc0;
         for (i, b) in n_bytes.iter_mut().enumerate().skip(1) {

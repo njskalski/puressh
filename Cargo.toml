@@ -4,7 +4,7 @@ version = "0.2.8"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-description = "A pure-Rust SSH (Secure Shell) protocol library, in the spirit of libssh, built on purecrypto."
+description = "A pure-Rust SSH (Secure Shell) protocol library, in the spirit of libssh, built on the RustCrypto crates."
 repository = "https://github.com/KarpelesLab/puressh"
 documentation = "https://docs.rs/puressh"
 readme = "README.md"
@@ -22,8 +22,8 @@ autobins = false
 # (`server`, `pam`) and the agent daemon (`agent`) are opt-in; the release
 # builds of the binaries enable all three.
 default = ["std", "client", "compress", "multichannel", "knock", "security-key", "pkcs11"]
-std = ["purecrypto/std", "alloc"]
-alloc = ["purecrypto/alloc"]
+std = ["alloc"]
+alloc = []
 # High-level client and server APIs depend on `std::net` / `std::io` /
 # `std::thread`, so they require the `std` feature.
 client = ["std"]
@@ -91,33 +91,45 @@ libc = { version = "0.2", default-features = false }
 # Run-time loading of libpam, FIDO providers and libfido2, and PKCS#11
 # modules (none is a link-time dependency).
 dlsym = { version = "0.0.2", optional = true }
-# 0.7 made `ec` stop implying `alloc`, so the boxed multi-curve path, `CurveId`
-# and every DER/PEM codec now need `alloc` named explicitly. We already name it
-# (our own `alloc` feature forwards to `purecrypto/alloc`, and `std` implies
-# `alloc`), so the break is a no-op here — but a `no_std` consumer that enabled
-# only `purecrypto/ec` would lose those items.
-#
-# 0.8's only break is an MSRV raise to Rust 1.89, which is why this crate's
-# `rust-version` moved with it. The floor is a patch release rather than 0.8
-# because the patch line carries security fixes we want as a minimum, not
-# merely as whatever a fresh resolve happens to pick: 0.8.1 brought a broad
-# constant-time / zeroization audit across EC, RSA, Falcon and the AEADs;
-# 0.8.2 tightened RSA key-import validation and wiped private-op scratch,
-# bounded custom DH-group validation (our `diffie-hellman-group-exchange`
-# path), and zeroized ChaCha20, ML-KEM and X25519 stack temporaries; 0.8.3
-# only touches DTLS/QUIC/Falcon but is the current tip of that line.
-#
-# 0.9's breaking changes are confined to TLS, QUIC, X.509 and LMS/HSS, none of
-# which this crate enables; the MSRV stays at Rust 1.89.
-#
-# 0.10's only break is TLS's `Readiness::from_raw_fd` becoming `unsafe`, which
-# we don't enable. Its non-TLS fixes include rejecting partial blocks in
-# `BlockCipher::{encrypt,decrypt}_blocks` (our CBC path goes through the `Cbc`
-# mode, which already errors on misaligned input) and keeping secret bignum
-# limbs off the heap in RSA blinding; the MSRV stays at Rust 1.89.
-purecrypto = { version = "0.10.4", default-features = false, features = [
-    "hash", "cipher", "mac", "kdf", "rng", "rsa", "dh", "ec", "der", "mlkem", "mldsa",
-] }
+
+# ---------------------------------------------------------------------------
+# Cryptographic primitives: the RustCrypto crates (plus the dalek curves),
+# which are the most widely used and reviewed pure-Rust implementations.
+# Everything is `default-features = false` so the library stays `no_std` +
+# `alloc`; `std` is forwarded where a crate has anything to gain from it.
+# The crate-local facade in `src/crypto/` is the only module that names these
+# crates; the rest of the library goes through it.
+sha1 = { version = "0.11", default-features = false, features = ["oid"] }
+sha2 = { version = "0.11", default-features = false, features = ["oid"] }
+md-5 = { version = "0.11", default-features = false }
+hmac = { version = "0.13", default-features = false }
+digest = { version = "0.11", default-features = false, features = ["mac", "oid"] }
+cipher = { version = "0.5", default-features = false }
+aes = { version = "0.9", default-features = false }
+ctr = { version = "0.10", default-features = false }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes"] }
+chacha20 = { version = "0.10", default-features = false, features = ["cipher"] }
+poly1305 = { version = "0.9", default-features = false }
+des = { version = "0.9", default-features = false }
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "rand_core", "zeroize", "hazmat"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh", "alloc"] }
+p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh", "alloc"] }
+p521 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh", "alloc"] }
+ecdsa = { version = "0.17", default-features = false, features = ["alloc", "algorithm"] }
+elliptic-curve = { version = "0.14", default-features = false, features = ["alloc", "arithmetic", "ecdh"] }
+rsa = { version = "0.10.0-rc.22", default-features = false, features = ["hazmat", "pkcs1v15"] }
+crypto-bigint = { version = "0.7", default-features = false, features = ["alloc", "rand_core", "zeroize"] }
+ml-kem = { version = "0.3", default-features = false, features = ["zeroize"] }
+kem = { version = "0.3", default-features = false }
+ml-dsa = { version = "0.1", default-features = false, features = ["alloc", "rand_core", "zeroize"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+bcrypt-pbkdf = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = { version = "0.13", default-features = false }
+base64ct = { version = "1", default-features = false, features = ["alloc"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+subtle = { version = "2", default-features = false }
+rand_core = { version = "0.10", default-features = false }
 # 0.6.10 minimum, not just 0.6: 0.6.9 fixed the zlib/deflate decoder reporting
 # `StreamEnd` instead of stalling on trailing bytes, and 0.6.10 extended that to
 # the other terminal states. `src/compress/zlib.rs` drives the decoder to a

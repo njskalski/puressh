@@ -62,9 +62,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::crypto::hash::{Digest, Sha1, Sha256};
 use crate::error::{Error, Result};
 use crate::format::{Reader, Writer, read_mpint};
-use purecrypto::hash::{Digest, Sha1, Sha256};
 
 /// KRL magic: `"SSHKRL\n\0"`.
 const KRL_MAGIC: u64 = 0x5353_484b_524c_0a00;

@@ -274,7 +274,7 @@ fn into_host_key_rsa_uses_sha512() {
 
 #[test]
 fn roundtrip_unencrypted_ed25519() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "rt-ed25519@test".to_string());
     let pem = sk.to_openssh_pem(None).unwrap();
     let parsed = PrivateKey::parse_openssh_pem(&pem, None).unwrap();
@@ -301,7 +301,7 @@ fn roundtrip_unencrypted_ed25519() {
 
 #[test]
 fn roundtrip_unencrypted_ecdsa_p256() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ecdsa(
         &mut rng,
         crate::key::EcdsaCurve::P256,
@@ -332,7 +332,7 @@ fn roundtrip_unencrypted_ecdsa_p256() {
 
 #[test]
 fn roundtrip_unencrypted_rsa_2048() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_rsa(&mut rng, 2048, "rt-rsa@test".to_string()).unwrap();
     let pem = sk.to_openssh_pem(None).unwrap();
     let parsed = PrivateKey::parse_openssh_pem(&pem, None).unwrap();
@@ -365,7 +365,7 @@ fn roundtrip_unencrypted_rsa_2048() {
 
 #[test]
 fn roundtrip_encrypted_ed25519() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "enc-ed25519@test".to_string());
     let pem = sk.to_openssh_pem(Some(b"test-passphrase")).unwrap();
     let parsed = PrivateKey::parse_openssh_pem(&pem, Some(b"test-passphrase")).unwrap();
@@ -380,7 +380,7 @@ fn roundtrip_encrypted_ed25519() {
 
 #[test]
 fn encrypted_wrong_passphrase_rejected() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "wp@test".to_string());
     let pem = sk.to_openssh_pem(Some(b"right")).unwrap();
     let err = PrivateKey::parse_openssh_pem(&pem, Some(b"wrong")).expect_err("should fail");
@@ -418,7 +418,7 @@ fn fingerprint_matches_openssh_cli() {
         }
     }
 
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "fp@test".to_string());
     let pub_line = sk.public_key().to_authorized_keys_line();
     let expected = sk.public_key().sha256_fingerprint();
@@ -472,7 +472,7 @@ fn fingerprint_matches_openssh_cli() {
 
 #[test]
 fn generated_key_signs_and_verifies() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "sv@test".to_string());
     let pub_blob = sk.public_key().wire_blob();
     let hk = sk.into_host_key().unwrap();
@@ -514,7 +514,7 @@ fn empty_passphrase_on_encrypted_key_is_rejected_loudly() {
     // Round-tripping with a real passphrase and then trying to decrypt with
     // Some(b"") must fail with the same "passphrase required" error as None,
     // not with a wrong-passphrase / format error after bcrypt churn.
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "empty-pass@test".to_string());
     let pem = sk.to_openssh_pem(Some(b"actual-secret")).unwrap();
     let err = PrivateKey::parse_openssh_pem(&pem, Some(b"")).expect_err("empty passphrase");
@@ -752,8 +752,8 @@ fn private_key_debug_is_redacted() {
 // ---------------------------------------------------------------------------
 #[test]
 fn rsa_host_key_with_primes_signs_and_verifies() {
+    use crate::crypto::bignum::BoxedUint;
     use crate::hostkey::HostKey;
-    use purecrypto::bignum::BoxedUint;
     let sk = PrivateKey::parse_openssh_pem(RSA_PEM_UNENCRYPTED, None).unwrap();
     let PrivateKey::Rsa { n, e, d, p, q, .. } = &sk else {
         panic!("not RSA");
@@ -874,7 +874,7 @@ fn pem_with_swapped_public(sk: &PrivateKey, evil_pub: &PublicKey) -> String {
 
 #[test]
 fn parse_rejects_public_key_not_derived_from_secret() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     // ed25519: swap in another key's public half (consistently, in both
     // places) — only derivation from the seed can catch this.
     let sk = PrivateKey::generate_ed25519(&mut rng, "victim".to_string());
@@ -910,7 +910,7 @@ fn parse_rejects_public_key_not_derived_from_secret() {
 
 #[test]
 fn mldsa44_ed25519_key_roundtrip_and_signatures() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_mldsa44_ed25519(&mut rng, "pq".to_string());
     let pem = sk.to_openssh_pem(None).unwrap();
     let back = PrivateKey::parse_openssh_pem(&pem, None).unwrap();
@@ -1022,7 +1022,7 @@ fn authorized_keys_options_full_set() {
 
 #[test]
 fn encrypted_pem_and_pkcs8_roundtrip() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let pass = b"correct horse";
     let ed = PrivateKey::generate_ed25519(&mut rng, String::new());
     let ec = PrivateKey::generate_ecdsa(&mut rng, EcdsaCurve::P256, String::new());
@@ -1090,7 +1090,7 @@ fn openssh_key_ciphers_interop() {
 
 #[test]
 fn every_key_cipher_round_trips() {
-    let mut rng = purecrypto::rng::OsRng;
+    let mut rng = crate::crypto::rng::OsRng;
     let sk = PrivateKey::generate_ed25519(&mut rng, "c".to_string());
     for cipher in OPENSSH_KEY_CIPHERS {
         let pem = sk
@@ -1146,7 +1146,7 @@ fn fingerprints_with_every_hash() {
 /// (`ssh-mldsa44-ed25519@openssh.com`) still reads, as the new one.
 #[test]
 fn mldsa_old_name_still_reads() {
-    let key = PrivateKey::generate_mldsa44_ed25519(&mut purecrypto::rng::OsRng, String::new());
+    let key = PrivateKey::generate_mldsa44_ed25519(&mut crate::crypto::rng::OsRng, String::new());
     let PublicKey::MlDsa44Ed25519 { raw, .. } = key.public_key() else {
         unreachable!()
     };

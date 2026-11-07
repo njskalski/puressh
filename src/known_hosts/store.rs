@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use purecrypto::rng::{OsRng, RngCore};
+use crate::crypto::rng::{OsRng, RngCore};
 
 use super::format::{
     Entry, HostSpec, Marker, ParsedLine, format_entry, format_host_pattern, parse_line,

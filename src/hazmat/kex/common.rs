@@ -65,11 +65,11 @@ pub struct KexOutput {
 
 impl Drop for KexOutput {
     fn drop(&mut self) {
-        purecrypto::zeroize::Zeroize::zeroize(&mut self.k);
+        crate::crypto::zeroize::Zeroize::zeroize(&mut self.k);
     }
 }
 
-impl purecrypto::zeroize::ZeroizeOnDrop for KexOutput {}
+impl crate::crypto::zeroize::ZeroizeOnDrop for KexOutput {}
 
 impl core::fmt::Debug for KexOutput {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

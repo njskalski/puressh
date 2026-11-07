@@ -8,9 +8,9 @@
 //! ChaCha20 nonce. The Poly1305 tag covers the encrypted length followed by
 //! the encrypted payload, with no AAD padding and no length trailer.
 
-use purecrypto::cipher::{ChaCha20, Poly1305};
-use purecrypto::ct::ConstantTimeEq;
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::cipher::{ChaCha20, Poly1305};
+use crate::crypto::ct::ConstantTimeEq;
+use crate::crypto::zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 
@@ -30,7 +30,7 @@ impl ChaChaPoly {
         // keys in `Zeroizing` so the 32-byte ChaCha20 raw key bytes are wiped
         // from the caller's stack frame after `ChaCha20::new` has folded them
         // into the upstream cipher state. The cipher state itself is owned by
-        // `purecrypto::cipher::ChaCha20` and not zeroized by us.
+        // `crypto::cipher::ChaCha20`, which wipes its own copy on drop.
         let mut k2: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
         let mut k1: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
         k2.copy_from_slice(&key[..32]);

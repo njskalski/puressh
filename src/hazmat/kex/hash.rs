@@ -2,8 +2,8 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::hash::Digest;
-use purecrypto::zeroize::{Zeroize, Zeroizing};
+use crate::crypto::hash::Digest;
+use crate::crypto::zeroize::{Zeroize, Zeroizing};
 
 /// Builder for the SSH key-exchange "exchange hash" `H`.
 ///
@@ -32,13 +32,13 @@ impl<D: Digest> ExchangeHash<D> {
     /// Append an SSH `string`: a 4-byte big-endian length followed by `s`.
     pub fn write_string(&mut self, s: &[u8]) {
         let len = s.len() as u32;
-        self.hasher.update(&len.to_be_bytes());
+        self.hasher.update(len.to_be_bytes());
         self.hasher.update(s);
     }
 
     /// Append a raw `uint32`.
     pub fn write_u32(&mut self, v: u32) {
-        self.hasher.update(&v.to_be_bytes());
+        self.hasher.update(v.to_be_bytes());
     }
 
     /// Append an unsigned magnitude encoded as an SSH `mpint`.
@@ -58,7 +58,7 @@ impl<D: Digest> ExchangeHash<D> {
         }
         if m[0] & 0x80 != 0 {
             self.write_u32((m.len() + 1) as u32);
-            self.hasher.update(&[0u8]);
+            self.hasher.update([0u8]);
             self.hasher.update(m);
         } else {
             self.write_u32(m.len() as u32);
@@ -74,7 +74,7 @@ impl<D: Digest> ExchangeHash<D> {
     /// Finish and return the digest as a `Vec<u8>` of length `D::OUTPUT_LEN`.
     pub fn finalize(self) -> Vec<u8> {
         let out = self.hasher.finalize();
-        out.as_ref().to_vec()
+        out.to_vec()
     }
 }
 
@@ -136,7 +136,7 @@ pub fn derive<D: Digest>(
     let mut hasher = D::new();
     hasher.update(k_mpint);
     hasher.update(h);
-    hasher.update(&[letter]);
+    hasher.update([letter]);
     hasher.update(session_id);
     let first = hasher.finalize();
     out.extend_from_slice(first.as_ref());
@@ -159,7 +159,7 @@ pub fn derive<D: Digest>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::hash::Sha256;
+    use crate::crypto::hash::Sha256;
 
     #[test]
     fn mpint_zero_is_empty_string() {

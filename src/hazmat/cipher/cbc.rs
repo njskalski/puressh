@@ -3,7 +3,7 @@
 //! implements them but offers none by default; they are here for old
 //! servers and devices that offer nothing else, when configured.
 
-use purecrypto::cipher::{Aes128, Aes192, Aes256, Cbc, Cbc64, TdesEde3};
+use crate::crypto::cipher::{Aes128, Aes192, Aes256, Cbc, TdesEde3};
 
 use crate::error::{Error, Result};
 
@@ -13,33 +13,45 @@ pub enum CbcState {
     Aes128(Cbc<Aes128>),
     Aes192(Cbc<Aes192>),
     Aes256(Cbc<Aes256>),
-    Tdes(Cbc64<TdesEde3>),
-}
-
-fn arr<const N: usize>(b: &[u8], what: &'static str) -> Result<[u8; N]> {
-    b.try_into().map_err(|_| Error::Format(what))
+    Tdes(Cbc<TdesEde3>),
 }
 
 impl CbcState {
     pub(crate) fn new(name: &str, key: &[u8], iv: &[u8]) -> Result<Self> {
+        fn check(
+            key: &[u8],
+            key_len: usize,
+            iv: &[u8],
+            iv_len: usize,
+            what: &'static str,
+        ) -> Result<()> {
+            if key.len() != key_len {
+                return Err(Error::Format(what));
+            }
+            if iv.len() != iv_len {
+                return Err(Error::Format("cbc iv len"));
+            }
+            Ok(())
+        }
+        let bad = || Error::Format("cbc key or iv len");
         Ok(match name {
-            "aes128-cbc" => CbcState::Aes128(Cbc::new(
-                Aes128::new(&arr(key, "aes128-cbc key len")?),
-                &arr(iv, "aes-cbc iv len")?,
-            )),
-            "aes192-cbc" => CbcState::Aes192(Cbc::new(
-                Aes192::new(&arr(key, "aes192-cbc key len")?),
-                &arr(iv, "aes-cbc iv len")?,
-            )),
-            "aes256-cbc" => CbcState::Aes256(Cbc::new(
-                Aes256::new(&arr(key, "aes256-cbc key len")?),
-                &arr(iv, "aes-cbc iv len")?,
-            )),
-            "3des-cbc" => CbcState::Tdes(Cbc64::new(
-                TdesEde3::new(&arr(key, "3des-cbc key len")?),
-                &arr(iv, "3des-cbc iv len")?,
-            )),
-            _ => return Err(Error::Unsupported("cipher")),
+            "aes128-cbc" => {
+                check(key, 16, iv, 16, "aes128-cbc key len")?;
+                CbcState::Aes128(Cbc::new(key, iv).map_err(|_| bad())?)
+            }
+            "aes192-cbc" => {
+                check(key, 24, iv, 16, "aes192-cbc key len")?;
+                CbcState::Aes192(Cbc::new(key, iv).map_err(|_| bad())?)
+            }
+            "aes256-cbc" => {
+                check(key, 32, iv, 16, "aes256-cbc key len")?;
+                CbcState::Aes256(Cbc::new(key, iv).map_err(|_| bad())?)
+            }
+            "3des-cbc" => {
+                check(key, 24, iv, 8, "3des-cbc key len")?;
+                CbcState::Tdes(Cbc::new(key, iv).map_err(|_| bad())?)
+            }
+            _ => return Err(Error::Unsupported("unsupported CBC cipher")),
         })
     }
 

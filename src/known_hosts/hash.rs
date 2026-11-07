@@ -5,8 +5,8 @@
 //! HMAC-SHA1 block size). The host string is the literal `host` (or
 //! `[host]:port` for non-default ports) — see [`format_host`].
 
-use purecrypto::hash::{Hmac, Sha1};
-use purecrypto::rng::{CryptoRng, RngCore};
+use crate::crypto::hash::{Hmac, Sha1};
+use crate::crypto::rng::{CryptoRng, RngCore};
 
 use crate::key::base64;
 
@@ -26,7 +26,7 @@ pub fn format_host(host: &str, port: u16) -> String {
 /// HMAC-SHA1 of the literal host string under the given salt. The output
 /// is the 20-byte tag, *not* base64-encoded.
 pub fn hmac(salt: &[u8], host: &str) -> [u8; 20] {
-    Hmac::<Sha1>::mac(salt, host.as_bytes())
+    Hmac::<Sha1>::mac(salt, host.as_bytes()).into()
 }
 
 /// Encode a `|1|salt|hash` token. Both fields are standard-alphabet

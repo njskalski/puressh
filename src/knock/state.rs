@@ -12,9 +12,9 @@ use core::net::IpAddr;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use purecrypto::ec::x25519::X25519PrivateKey;
-use purecrypto::rng::OsRng;
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ec::X25519PrivateKey;
+use crate::crypto::rng::OsRng;
+use crate::crypto::zeroize::Zeroizing;
 
 use super::wire::{self, Knock};
 use crate::error::{Error, Result};

@@ -74,7 +74,7 @@ impl CommandHandler for BannerHandler {
 }
 
 fn fresh_seed() -> [u8; 32] {
-    use purecrypto::rng::{OsRng, RngCore};
+    use puressh::crypto::rng::{OsRng, RngCore};
     let mut s = [0u8; 32];
     OsRng.fill_bytes(&mut s);
     s

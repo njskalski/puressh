@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::sync::Arc;
 
-use purecrypto::zeroize::{Zeroize, Zeroizing};
+use crate::crypto::zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{Error, Result};
 use crate::format::{Writer, write_mpint};
@@ -405,8 +405,8 @@ pub fn enroll(
         Some([]) => return Err(Error::Config("Missing enrollment challenge")),
         Some(c) => c,
         None => {
-            use purecrypto::rng::RngCore;
-            purecrypto::rng::OsRng.fill_bytes(&mut random[..]);
+            use crate::crypto::rng::RngCore;
+            crate::crypto::rng::OsRng.fill_bytes(&mut random[..]);
             &random[..]
         }
     };

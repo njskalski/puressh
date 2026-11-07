@@ -12,7 +12,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::OnceLock;
 
 use dlsym::Bindings;
-use purecrypto::zeroize::{Zeroize, Zeroizing};
+use puressh::crypto::zeroize::{Zeroize, Zeroizing};
 
 const PAM_SUCCESS: c_int = 0;
 const PAM_BUF_ERR: c_int = 5;

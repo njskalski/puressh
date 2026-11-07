@@ -7,13 +7,13 @@ use puressh::key::PublicKey;
 /// The digest of `blob` with the hash OpenSSH names `hash` (any case:
 /// `MD5`, `SHA1`, `SHA256`, `SHA384`, `SHA512`), `None` for another name.
 pub fn digest(blob: &[u8], hash: &str) -> Option<Vec<u8>> {
-    use purecrypto::hash::{Digest, Md5, Sha1, Sha256, Sha384, Sha512};
+    use puressh::crypto::hash::{Digest, Md5, Sha1, Sha256, Sha384, Sha512};
     Some(match hash.to_ascii_uppercase().as_str() {
-        "MD5" => Md5::digest(blob).as_ref().to_vec(),
-        "SHA1" => Sha1::digest(blob).as_ref().to_vec(),
-        "SHA256" => Sha256::digest(blob).as_ref().to_vec(),
-        "SHA384" => Sha384::digest(blob).as_ref().to_vec(),
-        "SHA512" => Sha512::digest(blob).as_ref().to_vec(),
+        "MD5" => Md5::digest(blob).to_vec(),
+        "SHA1" => Sha1::digest(blob).to_vec(),
+        "SHA256" => Sha256::digest(blob).to_vec(),
+        "SHA384" => Sha384::digest(blob).to_vec(),
+        "SHA512" => Sha512::digest(blob).to_vec(),
         _ => return None,
     })
 }

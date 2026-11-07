@@ -17,12 +17,12 @@
 //! mis-parsed — passphrase-protected keys in these formats are out of scope for
 //! now (the OpenSSH container remains the encrypted-key path).
 //!
-//! DER component extraction is done with [`purecrypto::der::Reader`]; the
+//! DER component extraction is done with [`crate::crypto::der::Reader`]; the
 //! resulting big-endian integers map directly onto the SSH `mpint` convention
 //! already used by [`super::PrivateKey`] (both are minimal big-endian with a
 //! `0x00` sign byte when the high bit is set), and [`write_mpint`] normalises on
 //! serialisation regardless. ECDSA/Ed25519 public parts are *derived* from the
-//! private scalar/seed via `purecrypto`, so a missing or inconsistent embedded
+//! private scalar/seed by [`crate::crypto::ec`], so a missing or inconsistent embedded
 //! public key cannot smuggle in a mismatched point.
 //!
 //! [`write_mpint`]: crate::format::write_mpint
@@ -30,9 +30,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use purecrypto::der::Reader as DerReader;
-use purecrypto::der::pem_decode;
-use purecrypto::ec::{BoxedEcdsaPrivateKey, CurveId, Ed25519PrivateKey};
+use crate::crypto::der::Reader as DerReader;
+use crate::crypto::der::pem_decode;
+use crate::crypto::ec::{CurveId, EcdsaPrivateKey, Ed25519PrivateKey};
 
 use super::PrivateKey;
 use crate::error::{Error, Result};
@@ -62,7 +62,7 @@ const TAG_OID: u8 = 0x06;
 /// Universal `NULL` tag.
 const TAG_NULL: u8 = 0x05;
 
-fn der_err(_e: purecrypto::der::Error) -> Error {
+fn der_err(_e: crate::crypto::der::Error) -> Error {
     Error::Format("der: malformed private key structure")
 }
 
@@ -213,7 +213,7 @@ fn parse_sec1_ec_der(der: &[u8], curve_hint: Option<&[u8]>) -> Result<PrivateKey
 
     let oid = curve_oid.ok_or(Error::Format("ec: missing curve identifier"))?;
     let (curve, ctor) = curve_from_oid(&oid)?;
-    let sk = BoxedEcdsaPrivateKey::from_bytes(curve, d_raw)
+    let sk = EcdsaPrivateKey::from_bytes(curve, d_raw)
         .map_err(|_| Error::Crypto("ec: private scalar out of range"))?;
     let point = sk.public_key().to_sec1();
     Ok(ctor(trim_leading_zeros(d_raw).to_vec(), point))
@@ -273,7 +273,7 @@ fn parse_pkcs8_ed25519(inner: &[u8]) -> Result<PrivateKey> {
 
 type EcdsaCtor = fn(Vec<u8>, Vec<u8>) -> PrivateKey;
 
-/// Map a named-curve OID to its `purecrypto` curve and the matching
+/// Map a named-curve OID to its [`CurveId`] and the matching
 /// [`PrivateKey`] constructor.
 fn curve_from_oid(oid: &[u8]) -> Result<(CurveId, EcdsaCtor)> {
     if oid == OID_P256 {

@@ -17,7 +17,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use purecrypto::hash::{Digest, Sha1};
+use crate::crypto::hash::{Digest, Sha1};
 
 /// Conservative usable length for a `sockaddr_un.sun_path`. The real limit is
 /// 108 on Linux / 104 on macOS *including* the trailing NUL; we keep a margin

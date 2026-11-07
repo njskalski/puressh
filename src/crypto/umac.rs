@@ -1,0 +1,1354 @@
+//! UMAC (RFC 4418) for `umac-64@openssh.com` and `umac-128@openssh.com`.
+//!
+//! There is no RustCrypto UMAC, so this is the implementation from the
+//! `purecrypto` crate (Karpelès Lab Inc., MIT licence), carried over with
+//! its RFC 4418 test vectors and re-based on the RustCrypto `aes` crate for
+//! the AES-128 key derivation and pad generation. It is the only primitive
+//! in this module that is not an external, widely shared crate; it is a
+//! MAC, so a defect here costs integrity of a CTR-mode session, never
+//! confidentiality or authentication of the peer.
+//!
+//!
+//! Two output sizes are provided:
+//!
+//! - [`Umac64`] — 8-byte tag (`UMAC-AES-128`, 2 internal iterations).
+//! - [`Umac128`] — 16-byte tag (`UMAC-AES-128`, 4 internal iterations).
+//!
+//! Both share the same construction (RFC 4418 §3):
+//!
+//! 1. **KDF** — derive internal keys by running AES-128 in counter mode over
+//!    the master key.
+//! 2. **L1-HASH (NH)** — break the message into 1024-byte chunks and reduce
+//!    each to 8 bytes via the constant-time *non-cryptographic* hash NH.
+//! 3. **L2-HASH (POLY)** — evaluate a polynomial over GF(p) on the chunked
+//!    L1 output, with p = 2⁶⁴−59 (or, for messages of L1 output larger than
+//!    2¹⁷ bytes, transitioning to p = 2¹²⁸−159).
+//! 4. **L3-HASH** — fold the 128-bit polynomial value into a 32-bit tag word
+//!    via an inner product modulo 2³⁶−5.
+//! 5. **PDF** — XOR the tag with an AES-derived per-nonce pad.
+//!
+//! The whole pipeline runs without table lookups (NH uses arithmetic only,
+//! AES uses [`Aes128`]'s constant-time GF(2⁸) S-box) and without
+//! secret-dependent branches: the modular reductions use masked conditional
+//! subtraction, the POLY marker case (RFC 4418 §6, which the RFC itself flags
+//! as a timing concern) evaluates both sequences and selects with a mask, and
+//! L3-HASH reduces modulo 2³⁶−5 by folding rather than with `%`. Only the
+//! message length steers control flow.
+//!
+//! # Example
+//!
+//! ```
+//! use puressh::crypto::umac::Umac64;
+//!
+//! let key   = [0u8; 16];
+//! let nonce = b"01234567";
+//! let tag   = Umac64::compute(&key, b"hello", nonce);
+//! assert_eq!(tag.len(), 8);
+//! ```
+
+use aes::Aes128;
+use cipher::{Block, BlockCipherEncrypt, KeyInit};
+use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+// ---------------------------------------------------------------------------
+//  Constants
+// ---------------------------------------------------------------------------
+
+/// 2³⁶ − 5, the prime used by L3-HASH (RFC 4418 §5.4).
+const P36: u64 = 0xf_fffffffb;
+
+/// 2⁶⁴ − 59, the prime used by POLY-64 (RFC 4418 §5.3).
+const P64: u64 = 0xffff_ffff_ffff_ffc5;
+
+/// 2¹²⁸ − 159, the prime used by POLY-128 (RFC 4418 §5.3).
+const P128: u128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ff61;
+
+/// Threshold below which POLY-64 inputs are processed directly: 2⁶⁴ − 2³².
+const MAXWR_64: u64 = 0xffff_ffff_0000_0000;
+
+/// Threshold below which POLY-128 inputs are processed directly: 2¹²⁸ − 2⁹⁶.
+const MAXWR_128: u128 = 0xffff_ffff_0000_0000_0000_0000_0000_0000;
+
+/// `2^wordbits − p` for each prime: the additive correction used when an
+/// input is larger than `maxwordrange`.
+const OFFSET_64: u64 = 59;
+const OFFSET_128: u128 = 159;
+
+/// Per-chunk key/data window length (bytes).
+const L1_KEY_LEN: usize = 1024;
+
+/// L1-output bytes after which POLY-64 transitions to POLY-128: 2¹⁷ bytes
+/// = 16384 NH outputs.
+const POLY64_OUTPUTS: u32 = 1 << 14;
+
+/// Per-32-bit-word mask applied to the L2 key (RFC 4418 §5.3): the high 7
+/// bits of every 32-bit half are forced to zero so that intermediate POLY
+/// products fit within 64-/128-bit accumulators.
+const MASK64: u64 = 0x01ff_ffff_01ff_ffff;
+const MASK128: u128 = 0x01ff_ffff_01ff_ffff_01ff_ffff_01ff_ffff;
+
+// ---------------------------------------------------------------------------
+//  Key derivation
+// ---------------------------------------------------------------------------
+
+/// RFC 4418 §3.2.1 KDF: AES-128 in counter mode with `(index, counter)` as
+/// the input block. `index` selects the keystream (0 = PDF, 1 = L1, 2 = L2,
+/// 3 = L3-K1, 4 = L3-K2); `out` receives `out.len()` bytes of keystream.
+///
+/// The counter blocks are independent, so they go through the batched
+/// batched `encrypt_blocks` a 1 KiB window at a time
+/// (the L1 key alone is 64 blocks) rather than one serial block each.
+fn kdf(aes: &Aes128, index: u64, out: &mut [u8]) {
+    const W: usize = 64;
+    let mut ks = [0u8; 16 * W];
+    let mut ctr: u64 = 1;
+    let mut written = 0;
+    while written < out.len() {
+        let nblk = (out.len() - written).div_ceil(16).min(W);
+        for blk in ks[..nblk * 16].chunks_exact_mut(16) {
+            blk[..8].copy_from_slice(&index.to_be_bytes());
+            blk[8..].copy_from_slice(&ctr.to_be_bytes());
+            ctr += 1;
+        }
+        let (blocks, _) = Block::<Aes128>::slice_as_chunks_mut(&mut ks[..nblk * 16]);
+        aes.encrypt_blocks(blocks);
+        let take = (out.len() - written).min(nblk * 16);
+        out[written..written + take].copy_from_slice(&ks[..take]);
+        written += take;
+    }
+    // Raw key-derivation keystream.
+    ks.zeroize();
+}
+
+// ---------------------------------------------------------------------------
+//  NH and L1-HASH
+// ---------------------------------------------------------------------------
+
+/// NH (RFC 4418 §5.2.2). `data` must be a multiple of 32 bytes; `key` holds
+/// at least `data.len() / 4` words. Returns the 64-bit NH value (before the
+/// L1 length adjustment).
+///
+/// Message words are read little-endian (per the ENDIAN-SWAP step of L1-HASH);
+/// key words were read big-endian (`str2uint` semantics, no ENDIAN-SWAP) once,
+/// when the key was derived.
+fn nh(key: &[u32], data: &[u8]) -> u64 {
+    debug_assert!(data.len().is_multiple_of(32) && key.len() >= data.len() / 4);
+    let mut y: u64 = 0;
+    // Each 32-byte step processes 8 32-bit words; pairs are (j, j+4).
+    for (blk, k) in data.chunks_exact(32).zip(key.chunks_exact(8)) {
+        let m = |j: usize| u32::from_le_bytes(blk[4 * j..4 * j + 4].try_into().unwrap());
+        for j in 0..4 {
+            let a = m(j).wrapping_add(k[j]) as u64;
+            let b = m(j + 4).wrapping_add(k[j + 4]) as u64;
+            y = y.wrapping_add(a.wrapping_mul(b));
+        }
+    }
+    y
+}
+
+/// Computes NH on a chunk (zero-padded to the next 32-byte boundary) and adds
+/// the original bit length, as RFC 4418 §5.2.1 prescribes. NH is a sum over
+/// 32-byte steps, so the whole steps are hashed in place and only a partial
+/// last step is padded in a 32-byte scratch block.
+fn l1_chunk(key: &[u32], data: &[u8], bit_length: u64) -> u64 {
+    debug_assert!(data.len() <= L1_KEY_LEN);
+    let full = data.len() - data.len() % 32;
+    let mut y = nh(key, &data[..full]);
+    let rem = &data[full..];
+    // An empty chunk (the whole message is empty) still hashes one 32-byte
+    // zero block.
+    if !rem.is_empty() || data.is_empty() {
+        let mut last = [0u8; 32];
+        last[..rem.len()].copy_from_slice(rem);
+        y = y.wrapping_add(nh(&key[full / 4..], &last));
+        last.zeroize();
+    }
+    y.wrapping_add(bit_length)
+}
+
+/// Runs L1-HASH on one chunk for every iteration and feeds the outputs to
+/// the per-iteration L2 state. A free function over the key/state fields so
+/// the chunk can be borrowed from the caller's input or from the streaming
+/// buffer alike.
+fn absorb_chunk<const ITER: usize>(
+    l1_key: &[u32; MAX_L1_KEY_BUF / 4],
+    l2: (&[u64; ITER], &[u128; ITER]),
+    iter_state: &mut [UmacIter; ITER],
+    chunk: &[u8],
+    bit_len: u64,
+) {
+    for (i, st) in iter_state.iter_mut().enumerate() {
+        // Iteration `i` uses the key shifted by 16 bytes (4 words) per step.
+        let key = &l1_key[i * 4..i * 4 + L1_KEY_LEN / 4];
+        st.absorb(l2.0[i], l2.1[i], l1_chunk(key, chunk, bit_len));
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Modular arithmetic for POLY
+// ---------------------------------------------------------------------------
+
+/// All-ones iff `flag` is true, zero otherwise — the usual branchless mask.
+/// `flag` comes from `overflowing_*`/comparison results that depend on secret
+/// intermediates, so it must never steer a branch. The mask goes through
+/// [`core::hint::black_box`] so the optimizer cannot see the `0`/`!0` shape
+/// and turn the masked selects below back into branches.
+#[inline]
+fn mask64(flag: bool) -> u64 {
+    core::hint::black_box((flag as u64).wrapping_neg())
+}
+
+#[inline]
+fn mask128(flag: bool) -> u128 {
+    core::hint::black_box((flag as u128).wrapping_neg())
+}
+
+/// Constant-time `x mod p` for `x < 2·p`: subtracts `p` iff that does not
+/// borrow.
+#[inline]
+fn csub_p64(x: u64) -> u64 {
+    let (d, borrow) = x.overflowing_sub(P64);
+    // borrow ⇒ keep `x`; no borrow ⇒ take `d`.
+    (d & !mask64(borrow)) | (x & mask64(borrow))
+}
+
+#[inline]
+fn csub_p128(x: u128) -> u128 {
+    let (d, borrow) = x.overflowing_sub(P128);
+    (d & !mask128(borrow)) | (x & mask128(borrow))
+}
+
+#[inline]
+fn add_mod_p64(a: u64, b: u64) -> u64 {
+    let (s, carry) = a.overflowing_add(b);
+    let s = s.wrapping_add(OFFSET_64 & mask64(carry));
+    csub_p64(s)
+}
+
+#[inline]
+fn add_mod_p128(a: u128, b: u128) -> u128 {
+    let (s, carry) = a.overflowing_add(b);
+    let s = s.wrapping_add(OFFSET_128 & mask128(carry));
+    csub_p128(s)
+}
+
+/// `(a * b) mod (2⁶⁴ − 59)`. Uses the identity `2⁶⁴ ≡ 59 (mod p)` to fold
+/// the high half of the 128-bit product back into 64 bits.
+fn mul_mod_p64(a: u64, b: u64) -> u64 {
+    let prod = (a as u128) * (b as u128);
+    let lo = prod as u64;
+    let hi = (prod >> 64) as u64;
+    // First reduction: prod ≡ lo + 59·hi (mod p64).
+    let lift1 = (lo as u128) + (OFFSET_64 as u128) * (hi as u128); // < 60·2⁶⁴
+    let lift1_lo = lift1 as u64;
+    let lift1_hi = (lift1 >> 64) as u64; // < 60
+    // Second reduction: lift1 ≡ lift1_lo + 59·lift1_hi (mod p64).
+    let (r, carry) = lift1_lo.overflowing_add(OFFSET_64.wrapping_mul(lift1_hi));
+    let r = r.wrapping_add(OFFSET_64 & mask64(carry));
+    csub_p64(r)
+}
+
+/// `(a * b) mod (2¹²⁸ − 159)`. Schoolbook-multiplies into four 64-bit limbs,
+/// then collapses with `2¹²⁸ ≡ 159 (mod p)`.
+fn mul_mod_p128(a: u128, b: u128) -> u128 {
+    let a_lo = a as u64;
+    let a_hi = (a >> 64) as u64;
+    let b_lo = b as u64;
+    let b_hi = (b >> 64) as u64;
+
+    let ll = (a_lo as u128) * (b_lo as u128);
+    let lh = (a_lo as u128) * (b_hi as u128);
+    let hl = (a_hi as u128) * (b_lo as u128);
+    let hh = (a_hi as u128) * (b_hi as u128);
+
+    let ll_lo = ll as u64;
+    let ll_hi = (ll >> 64) as u64;
+    let lh_lo = lh as u64;
+    let lh_hi = (lh >> 64) as u64;
+    let hl_lo = hl as u64;
+    let hl_hi = (hl >> 64) as u64;
+    let hh_lo = hh as u64;
+    let hh_hi = (hh >> 64) as u64;
+
+    // a·b = w3·2¹⁹² + w2·2¹²⁸ + w1·2⁶⁴ + w0
+    let w0 = ll_lo;
+    let s1 = (ll_hi as u128) + (lh_lo as u128) + (hl_lo as u128);
+    let w1 = s1 as u64;
+    let c1 = (s1 >> 64) as u64;
+    let s2 = (lh_hi as u128) + (hl_hi as u128) + (hh_lo as u128) + (c1 as u128);
+    let w2 = s2 as u64;
+    let c2 = (s2 >> 64) as u64;
+    let w3 = hh_hi.wrapping_add(c2);
+
+    // a·b ≡ (w0 + 159·w2) + (w1 + 159·w3)·2⁶⁴  (mod p128).
+    let r0 = (w0 as u128) + OFFSET_128 * (w2 as u128); // < 2⁷²
+    let r1 = (w1 as u128) + OFFSET_128 * (w3 as u128); // < 2⁷²
+
+    let r0_lo = r0 as u64;
+    let r0_hi = (r0 >> 64) as u64; // < 2⁸
+    let r1_lo = r1 as u64;
+    let r1_hi = (r1 >> 64) as u64; // < 2⁸
+
+    let mid = (r0_hi as u128) + (r1_lo as u128); // < 2⁶⁵
+    let mid_lo = mid as u64;
+    let mid_hi = (mid >> 64) as u64; // 0 or 1
+
+    let low128: u128 = (r0_lo as u128) | ((mid_lo as u128) << 64);
+    let high = (mid_hi as u128) + (r1_hi as u128); // < 2⁹
+    let extra = high * OFFSET_128;
+    let (sum, overflow) = low128.overflowing_add(extra);
+    let sum = sum.wrapping_add(OFFSET_128 & mask128(overflow));
+    csub_p128(sum)
+}
+
+/// POLY-64 step (RFC 4418 §5.3.2). Inputs at or above `MAXWR_64` are split
+/// into a marker followed by `m − OFFSET_64` so the input always reduces
+/// modulo `p64`.
+///
+/// `m` is an L1-HASH output, i.e. a secret, so the marker case must not be
+/// distinguishable by timing: **both** sequences are evaluated and the result
+/// is selected with a mask. The extra two modular multiplies per 1024 bytes of
+/// message are negligible next to NH's 128 multiplies over the same bytes.
+#[inline]
+fn poly64_step(k64: u64, acc: &mut u64, m: u64) {
+    let marker = mask64(m >= MAXWR_64);
+    let first = mul_mod_p64(k64, *acc);
+    // Non-marker sequence: one step with `m` itself.
+    let plain = add_mod_p64(first, m);
+    // Marker sequence: a `p64 − 1` marker word, then `m − OFFSET_64`.
+    let marked = add_mod_p64(
+        mul_mod_p64(k64, add_mod_p64(first, P64 - 1)),
+        m.wrapping_sub(OFFSET_64),
+    );
+    *acc = (marked & marker) | (plain & !marker);
+}
+
+/// POLY-128 step (RFC 4418 §5.3.2). Same shape as [`poly64_step`], including
+/// the branchless marker handling.
+#[inline]
+fn poly128_step(k128: u128, acc: &mut u128, m: u128) {
+    let marker = mask128(m >= MAXWR_128);
+    let first = mul_mod_p128(k128, *acc);
+    let plain = add_mod_p128(first, m);
+    let marked = add_mod_p128(
+        mul_mod_p128(k128, add_mod_p128(first, P128 - 1)),
+        m.wrapping_sub(OFFSET_128),
+    );
+    *acc = (marked & marker) | (plain & !marker);
+}
+
+// ---------------------------------------------------------------------------
+//  L3-HASH
+// ---------------------------------------------------------------------------
+
+/// Constant-time `x mod (2³⁶ − 5)` for any `x`.
+///
+/// A `%` on a secret is variable time on many targets (and the hardware
+/// divider's latency is operand-dependent even where it is not a libcall), so
+/// fold instead: `2³⁶ ≡ 5 (mod p36)`, hence `x ≡ (x mod 2³⁶) + 5·(x >> 36)`.
+/// Two folds bring any `u64` below `2³⁶ + 5`, and two conditional
+/// subtractions finish the reduction. Used both for the L3-HASH inner product
+/// (`x < 2⁵⁵`) and for reducing the secret L3 key words at setup.
+#[inline]
+fn reduce_p36(x: u64) -> u64 {
+    const LOW36: u64 = (1u64 << 36) - 1;
+    // x < 2⁶⁴ ⇒ hi < 2²⁸ ⇒ r1 < 2³⁶ + 5·2²⁸ < 2³⁷.
+    let r1 = (x & LOW36) + 5 * (x >> 36);
+    // r1 < 2³⁷ ⇒ r2 < 2³⁶ + 5.
+    let r2 = (r1 & LOW36) + 5 * (r1 >> 36);
+    // r2 − p36 < p36, so at most two conditional subtractions are needed.
+    let r3 = csub_p36(r2);
+    csub_p36(r3)
+}
+
+/// Subtracts `p36` iff that does not borrow (branchless).
+#[inline]
+fn csub_p36(x: u64) -> u64 {
+    let (d, borrow) = x.overflowing_sub(P36);
+    (d & !mask64(borrow)) | (x & mask64(borrow))
+}
+
+/// L3-HASH (RFC 4418 §5.4.1). `k1_reduced` is the 8-word K1 already reduced
+/// modulo `p36`, `k2` is the 4-byte K2 (raw, XORed at the end), and `b` is
+/// the 16-byte input from L2-HASH.
+fn l3_hash(k1_reduced: &[u64; 8], k2: &[u8; 4], b: &[u8; 16]) -> [u8; 4] {
+    // m_i < 2¹⁶, k_i < 2³⁶ → m·k < 2⁵². Sum of 8 < 2⁵⁵, fits in u64.
+    let mut sum: u64 = 0;
+    for i in 0..8 {
+        let m_i = u16::from_be_bytes([b[i * 2], b[i * 2 + 1]]) as u64;
+        sum = sum.wrapping_add(m_i.wrapping_mul(k1_reduced[i]));
+    }
+    let y = reduce_p36(sum) as u32; // y mod 2³² takes the low 32 bits
+    let k2_u32 = u32::from_be_bytes(*k2);
+    (y ^ k2_u32).to_be_bytes()
+}
+
+// ---------------------------------------------------------------------------
+//  PDF
+// ---------------------------------------------------------------------------
+
+/// PDF for an 8-byte tag (RFC 4418 §3.3.1). `nonce.len()` must be 1..=16.
+///
+/// The spec specifies right-padding (`Nonce || zeroes(...)`), so the nonce
+/// occupies the LOW bytes of the AES input block and trailing bytes are
+/// zero; the index XOR therefore touches the last byte of the nonce, not
+/// of the full block.
+fn pdf_8(aes_pdf: &Aes128, nonce: &[u8]) -> [u8; 8] {
+    debug_assert!(!nonce.is_empty() && nonce.len() <= 16);
+    let mut t = [0u8; 16];
+    // index = str2uint(nonce) mod 2 → low bit of last nonce byte
+    let last = nonce.len() - 1;
+    let index = nonce[last] & 1;
+    t[..nonce.len()].copy_from_slice(nonce);
+    t[last] ^= index; // clears the low bit of the last nonce byte
+    aes_pdf.encrypt_block((&mut t).into());
+    let start = (index as usize) * 8;
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&t[start..start + 8]);
+    out
+}
+
+/// PDF for a 16-byte tag (RFC 4418 §3.3.1). `nonce.len()` must be 1..=16.
+/// Unlike [`pdf_8`], no index masking is needed: each nonce already maps to
+/// a unique AES block.
+fn pdf_16(aes_pdf: &Aes128, nonce: &[u8]) -> [u8; 16] {
+    debug_assert!(!nonce.is_empty() && nonce.len() <= 16);
+    let mut t = [0u8; 16];
+    t[..nonce.len()].copy_from_slice(nonce);
+    aes_pdf.encrypt_block((&mut t).into());
+    t
+}
+
+// ---------------------------------------------------------------------------
+//  Per-iteration L2 state machine
+// ---------------------------------------------------------------------------
+
+/// One UHASH iteration's POLY state. The first L1 output is buffered (not
+/// fed into POLY yet) so that, on a single-chunk message, [`finalize_l2`]
+/// can shortcut to `B = zeros(8) || A` per RFC 4418 §5.1.
+#[derive(Clone)]
+struct UmacIter {
+    poly64_acc: u64,
+    poly128_acc: u128,
+    /// Number of L1 outputs absorbed (including the buffered first one).
+    l1_outputs: u32,
+    /// The first L1 output, before POLY starts.
+    pending_first: u64,
+    /// `true` once we cross the 2¹⁷-byte threshold and switch to POLY-128.
+    transitioned: bool,
+    /// Half of a 16-byte POLY-128 input. `half_pending` tracks whether the
+    /// low 8 bytes are populated.
+    poly128_half: [u8; 8],
+    half_pending: bool,
+}
+
+impl UmacIter {
+    fn new() -> Self {
+        Self {
+            poly64_acc: 1, // POLY initial value
+            poly128_acc: 1,
+            l1_outputs: 0,
+            pending_first: 0,
+            transitioned: false,
+            poly128_half: [0; 8],
+            half_pending: false,
+        }
+    }
+
+    /// Absorbs one L1 output (8-byte `nh + bitlen` value).
+    fn absorb(&mut self, k64: u64, k128: u128, l1_out: u64) {
+        self.l1_outputs = self.l1_outputs.saturating_add(1);
+        if self.l1_outputs == 1 {
+            // Hold the first output back; we may skip POLY altogether.
+            self.pending_first = l1_out;
+            return;
+        }
+        if self.l1_outputs == 2 {
+            // The second output triggers L2-HASH; replay the first one.
+            poly64_step(k64, &mut self.poly64_acc, self.pending_first);
+        }
+
+        if self.l1_outputs <= POLY64_OUTPUTS {
+            poly64_step(k64, &mut self.poly64_acc, l1_out);
+        } else {
+            // POLY-128 mode. Lazily transition on the first input past the
+            // boundary, then pair subsequent L1 outputs into 16-byte words.
+            if !self.transitioned {
+                let init = self.poly64_acc as u128; // uint2str(y, 16) is BE-padded
+                poly128_step(k128, &mut self.poly128_acc, init);
+                self.transitioned = true;
+            }
+            let bytes = l1_out.to_be_bytes();
+            if !self.half_pending {
+                self.poly128_half.copy_from_slice(&bytes);
+                self.half_pending = true;
+            } else {
+                let mut paired = [0u8; 16];
+                paired[..8].copy_from_slice(&self.poly128_half);
+                paired[8..].copy_from_slice(&bytes);
+                let m = u128::from_be_bytes(paired);
+                poly128_step(k128, &mut self.poly128_acc, m);
+                self.half_pending = false;
+            }
+        }
+    }
+
+    /// Produces the 16-byte L2-HASH output for this iteration.
+    fn finalize(&mut self, k128: u128) -> [u8; 16] {
+        // No L1 outputs at all: empty message edge case handled upstream by
+        // forcing one zero-chunk L1 output; this branch is defensive.
+        if self.l1_outputs == 0 {
+            return [0u8; 16];
+        }
+        if self.l1_outputs == 1 {
+            // B = zeros(8) || A
+            let mut b = [0u8; 16];
+            b[8..].copy_from_slice(&self.pending_first.to_be_bytes());
+            return b;
+        }
+        if !self.transitioned {
+            let mut b = [0u8; 16];
+            b[8..].copy_from_slice(&self.poly64_acc.to_be_bytes());
+            return b;
+        }
+        // POLY-128 close-out: append 0x80 marker, zero-pad to 16-byte
+        // boundary (RFC 4418 §5.3.1). Always produces exactly one more
+        // POLY-128 input.
+        let mut final_block = [0u8; 16];
+        if self.half_pending {
+            final_block[..8].copy_from_slice(&self.poly128_half);
+            final_block[8] = 0x80;
+        } else {
+            final_block[0] = 0x80;
+        }
+        let m = u128::from_be_bytes(final_block);
+        poly128_step(k128, &mut self.poly128_acc, m);
+        self.poly128_acc.to_be_bytes()
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Public types: Umac64, Umac128
+// ---------------------------------------------------------------------------
+
+/// Maximum number of UHASH iterations supported (UMAC-128 uses 4).
+const MAX_ITER: usize = 4;
+
+/// L1-key buffer size for the largest supported iteration count, in bytes.
+const MAX_L1_KEY_BUF: usize = L1_KEY_LEN + (MAX_ITER - 1) * 16;
+
+/// Shared streaming state, parameterized by the iteration count `ITER`.
+/// `ITER = 2` produces an 8-byte tag; `ITER = 4` produces a 16-byte tag.
+#[derive(Clone)]
+struct UmacInner<const ITER: usize> {
+    /// AES cipher pre-keyed with K' = KDF(K, 0).
+    pdf_aes: Aes128,
+    /// L1 keys as big-endian 32-bit words, packed contiguously: iteration
+    /// `i` uses bytes `i*16 .. i*16 + 1024`, i.e. words `i*4 .. i*4 + 256`.
+    l1_key: [u32; MAX_L1_KEY_BUF / 4],
+    /// L2 keys, post-mask, per iteration.
+    l2_k64: [u64; ITER],
+    l2_k128: [u128; ITER],
+    /// L3-K1, reduced modulo `p36` per word.
+    l3_k1: [[u64; 8]; ITER],
+    /// L3-K2, raw (XORed at the very end).
+    l3_k2: [[u8; 4]; ITER],
+
+    /// 1024-byte chunk buffer for streaming.
+    chunk: [u8; L1_KEY_LEN],
+    chunk_off: usize,
+    /// Total bytes absorbed via [`update`](UmacInner::update).
+    total_bytes: u64,
+    /// Per-iteration POLY state.
+    iter_state: [UmacIter; ITER],
+}
+
+impl<const ITER: usize> UmacInner<ITER> {
+    fn new(key: &[u8; 16]) -> Self {
+        let master = Aes128::new(key.into());
+
+        // K' = KDF(K, 0, 16)
+        let mut pdf_key = [0u8; 16];
+        kdf(&master, 0, &mut pdf_key);
+        let pdf_aes = Aes128::new((&pdf_key).into());
+
+        // L1-Key: 1024 + (ITER-1)*16 bytes
+        let l1_len = L1_KEY_LEN + (ITER - 1) * 16;
+        let mut l1_bytes = [0u8; MAX_L1_KEY_BUF];
+        kdf(&master, 1, &mut l1_bytes[..l1_len]);
+        let mut l1_key = [0u32; MAX_L1_KEY_BUF / 4];
+        for (w, b) in l1_key.iter_mut().zip(l1_bytes.chunks_exact(4)) {
+            *w = u32::from_be_bytes(b.try_into().unwrap());
+        }
+        l1_bytes.zeroize();
+
+        // L2-Key: 24·ITER bytes; split into k64 || k128 per iteration.
+        let mut l2_buf = [0u8; 24 * MAX_ITER];
+        kdf(&master, 2, &mut l2_buf[..24 * ITER]);
+        let mut l2_k64 = [0u64; ITER];
+        let mut l2_k128 = [0u128; ITER];
+        for i in 0..ITER {
+            let base = i * 24;
+            let k64_bytes: [u8; 8] = l2_buf[base..base + 8].try_into().unwrap();
+            let k128_bytes: [u8; 16] = l2_buf[base + 8..base + 24].try_into().unwrap();
+            l2_k64[i] = u64::from_be_bytes(k64_bytes) & MASK64;
+            l2_k128[i] = u128::from_be_bytes(k128_bytes) & MASK128;
+        }
+
+        // L3-Key1: 64·ITER bytes; 8 64-bit words per iteration, pre-reduced.
+        let mut l3k1_buf = [0u8; 64 * MAX_ITER];
+        kdf(&master, 3, &mut l3k1_buf[..64 * ITER]);
+        let mut l3_k1 = [[0u64; 8]; ITER];
+        for (i, words) in l3_k1.iter_mut().enumerate() {
+            for (j, slot) in words.iter_mut().enumerate() {
+                let base = i * 64 + j * 8;
+                let raw: [u8; 8] = l3k1_buf[base..base + 8].try_into().unwrap();
+                // Key material: reduce by folding, not with `%` (see
+                // `reduce_p36` for why a division on a secret is avoided).
+                *slot = reduce_p36(u64::from_be_bytes(raw));
+            }
+        }
+
+        // L3-Key2: 4·ITER bytes; one 32-bit word per iteration.
+        let mut l3k2_buf = [0u8; 4 * MAX_ITER];
+        kdf(&master, 4, &mut l3k2_buf[..4 * ITER]);
+        let mut l3_k2 = [[0u8; 4]; ITER];
+        for i in 0..ITER {
+            l3_k2[i].copy_from_slice(&l3k2_buf[i * 4..i * 4 + 4]);
+        }
+
+        Self {
+            pdf_aes,
+            l1_key,
+            l2_k64,
+            l2_k128,
+            l3_k1,
+            l3_k2,
+            chunk: [0u8; L1_KEY_LEN],
+            chunk_off: 0,
+            total_bytes: 0,
+            iter_state: core::array::from_fn(|_| UmacIter::new()),
+        }
+    }
+
+    /// Absorbs `chunk` (the caller's input), or the buffered
+    /// `self.chunk[..chunk_off]` when `None`, as one L1 chunk of the given
+    /// bit length.
+    fn process_chunk(&mut self, chunk: Option<&[u8]>, bit_len: u64) {
+        let chunk = chunk.unwrap_or(&self.chunk[..self.chunk_off]);
+        absorb_chunk(
+            &self.l1_key,
+            (&self.l2_k64, &self.l2_k128),
+            &mut self.iter_state,
+            chunk,
+            bit_len,
+        );
+    }
+
+    fn update(&mut self, mut data: &[u8]) {
+        while !data.is_empty() {
+            if self.chunk_off == 0 && data.len() >= L1_KEY_LEN {
+                // Whole chunks are hashed straight from the input. A full
+                // chunk's bit length is 8192 whether or not it ends up last
+                // (see `finalize_uhash`), so eager processing is exact.
+                let (c, rest) = data.split_at(L1_KEY_LEN);
+                self.process_chunk(Some(c), (L1_KEY_LEN as u64) * 8);
+                self.total_bytes = self.total_bytes.wrapping_add(L1_KEY_LEN as u64);
+                data = rest;
+                continue;
+            }
+            let take = (L1_KEY_LEN - self.chunk_off).min(data.len());
+            self.chunk[self.chunk_off..self.chunk_off + take].copy_from_slice(&data[..take]);
+            self.chunk_off += take;
+            self.total_bytes = self.total_bytes.wrapping_add(take as u64);
+            data = &data[take..];
+            if self.chunk_off == L1_KEY_LEN {
+                self.process_chunk(None, (L1_KEY_LEN as u64) * 8);
+                self.chunk_off = 0;
+            }
+        }
+    }
+
+    /// Finalizes all L1 chunks, runs L2-HASH and L3-HASH per iteration, and
+    /// writes the concatenated 4-byte tags into `out` (length = 4·ITER).
+    fn finalize_uhash(&mut self, out: &mut [u8]) {
+        debug_assert_eq!(out.len(), 4 * ITER);
+
+        if self.total_bytes == 0 {
+            // RFC 4418: t = max(ceil(0/8192), 1) = 1 → process one empty
+            // chunk so each iter has an L1 output to fold.
+            self.process_chunk(Some(&[]), 0);
+        } else if self.chunk_off > 0 {
+            // Partial final chunk; its bit length is the real (pre-pad)
+            // length, not 8192.
+            let bit_len = (self.chunk_off as u64) * 8;
+            self.process_chunk(None, bit_len);
+        }
+        // else: total_bytes is a positive multiple of 1024; every chunk was
+        // a full chunk already absorbed by process_full_chunk with bit
+        // length 8192, which is the correct value for both the last full
+        // chunk and any non-final chunk.
+
+        for i in 0..ITER {
+            let b = self.iter_state[i].finalize(self.l2_k128[i]);
+            let c = l3_hash(&self.l3_k1[i], &self.l3_k2[i], &b);
+            out[i * 4..i * 4 + 4].copy_from_slice(&c);
+        }
+    }
+}
+
+impl<const ITER: usize> Drop for UmacInner<ITER> {
+    fn drop(&mut self) {
+        // Best-effort wipe of all key-derived state. `pdf_aes` zeros its
+        // expanded round keys in its own `Drop`. The remaining fields hold
+        // L1/L2/L3 keys derived from the master via the AES-CTR KDF, the
+        // streaming chunk buffer (plaintext), and the per-iteration POLY
+        // accumulators — all of which leak information about the secret keys
+        // or the message. `Zeroize` issues volatile stores plus a compiler
+        // fence, so LLVM cannot elide the writes as dead stores.
+        self.l1_key.zeroize();
+        self.l2_k64.zeroize();
+        self.l2_k128.zeroize();
+        self.l3_k1.zeroize();
+        self.l3_k2.zeroize();
+        self.chunk.zeroize();
+        self.chunk_off = 0;
+        self.total_bytes = 0;
+        for it in self.iter_state.iter_mut() {
+            it.poly64_acc.zeroize();
+            it.poly128_acc.zeroize();
+            it.l1_outputs = 0;
+            it.pending_first.zeroize();
+            it.transitioned = false;
+            it.poly128_half.zeroize();
+            it.half_pending = false;
+        }
+    }
+}
+
+impl<const ITER: usize> ZeroizeOnDrop for UmacInner<ITER> {}
+
+/// UMAC-AES-128 with an 8-byte tag (RFC 4418, 2 internal iterations).
+///
+/// Construct with [`Umac64::new`], absorb input via [`Umac64::update`], and
+/// commit with [`Umac64::finalize`] given the per-message nonce. The nonce
+/// must be 1 to 16 bytes and must not repeat under the same key (otherwise
+/// tag forgeries become trivial).
+#[derive(Clone)]
+pub struct Umac64 {
+    inner: UmacInner<2>,
+}
+
+impl Umac64 {
+    /// Creates a new UMAC-64 state under the given 128-bit AES key.
+    pub fn new(key: &[u8; 16]) -> Self {
+        Self {
+            inner: UmacInner::new(key),
+        }
+    }
+
+    /// Absorbs `data` into the streaming state.
+    pub fn update(&mut self, data: &[u8]) {
+        self.inner.update(data);
+    }
+
+    /// Finalizes the MAC and returns the 8-byte tag. `nonce.len()` must be
+    /// 1..=16 and must be unique per key.
+    pub fn finalize(mut self, nonce: &[u8]) -> [u8; 8] {
+        assert!(
+            !nonce.is_empty() && nonce.len() <= 16,
+            "UMAC nonce length must be 1..=16 bytes"
+        );
+        let mut tag = [0u8; 8];
+        self.inner.finalize_uhash(&mut tag);
+        let pad = pdf_8(&self.inner.pdf_aes, nonce);
+        for i in 0..8 {
+            tag[i] ^= pad[i];
+        }
+        tag
+    }
+
+    /// Consumes the MAC and checks the tag for `nonce` against `expected` in
+    /// constant time.
+    ///
+    /// Returns `true` iff `expected` is a full 8-byte tag equal to the
+    /// recomputed tag. Truncated tags (including the empty slice) are rejected
+    /// unconditionally: accepting a short `n`-byte prefix would drop forgery
+    /// resistance to `2^(8n)`, and an empty tag would be an unconditional
+    /// accept. The comparison time of the full-length path depends only on the
+    /// (public) tag length, not on where any mismatch occurs, and the
+    /// recomputed tag is wiped before returning. `nonce` follows the same
+    /// rules as in [`finalize`](Self::finalize), except that an out-of-range
+    /// nonce (empty or longer than 16 bytes) makes `verify` return `false`
+    /// instead of panicking, so attacker-supplied nonces cannot abort the
+    /// verifier.
+    pub fn verify(self, nonce: &[u8], expected: &[u8]) -> bool {
+        if expected.len() != 8 || nonce.is_empty() || nonce.len() > 16 {
+            return false;
+        }
+        let mut tag = self.finalize(nonce);
+        // Declassified (Valgrind harness): the verdict is returned.
+        let ok = bool::from(tag[..].ct_eq(expected));
+        tag.zeroize();
+        ok
+    }
+
+    /// One-shot: compute the 8-byte UMAC of `data` with `nonce` under `key`.
+    pub fn compute(key: &[u8; 16], data: &[u8], nonce: &[u8]) -> [u8; 8] {
+        let mut s = Self::new(key);
+        s.update(data);
+        s.finalize(nonce)
+    }
+}
+
+/// UMAC-AES-128 with a 16-byte tag (RFC 4418, 4 internal iterations).
+///
+/// See [`Umac64`] for the construction details; the only difference is the
+/// number of UHASH iterations (and therefore the tag length).
+#[derive(Clone)]
+pub struct Umac128 {
+    inner: UmacInner<4>,
+}
+
+impl Umac128 {
+    /// Creates a new UMAC-128 state under the given 128-bit AES key.
+    pub fn new(key: &[u8; 16]) -> Self {
+        Self {
+            inner: UmacInner::new(key),
+        }
+    }
+
+    /// Absorbs `data` into the streaming state.
+    pub fn update(&mut self, data: &[u8]) {
+        self.inner.update(data);
+    }
+
+    /// Finalizes the MAC and returns the 16-byte tag. `nonce.len()` must be
+    /// 1..=16 and must be unique per key.
+    pub fn finalize(mut self, nonce: &[u8]) -> [u8; 16] {
+        assert!(
+            !nonce.is_empty() && nonce.len() <= 16,
+            "UMAC nonce length must be 1..=16 bytes"
+        );
+        let mut tag = [0u8; 16];
+        self.inner.finalize_uhash(&mut tag);
+        let pad = pdf_16(&self.inner.pdf_aes, nonce);
+        for i in 0..16 {
+            tag[i] ^= pad[i];
+        }
+        tag
+    }
+
+    /// Consumes the MAC and checks the tag for `nonce` against `expected` in
+    /// constant time.
+    ///
+    /// Returns `true` iff `expected` is a full 16-byte tag equal to the
+    /// recomputed tag; see [`Umac64::verify`] for why truncated tags are
+    /// rejected unconditionally and what the timing depends on. An empty or
+    /// over-long (> 16 bytes) nonce returns `false` rather than panicking.
+    pub fn verify(self, nonce: &[u8], expected: &[u8]) -> bool {
+        if expected.len() != 16 || nonce.is_empty() || nonce.len() > 16 {
+            return false;
+        }
+        let mut tag = self.finalize(nonce);
+        // Declassified (Valgrind harness): the verdict is returned.
+        let ok = bool::from(tag[..].ct_eq(expected));
+        tag.zeroize();
+        ok
+    }
+
+    /// One-shot: compute the 16-byte UMAC of `data` with `nonce` under `key`.
+    pub fn compute(key: &[u8; 16], data: &[u8], nonce: &[u8]) -> [u8; 16] {
+        let mut s = Self::new(key);
+        s.update(data);
+        s.finalize(nonce)
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "alloc"))]
+mod tests {
+    use super::*;
+
+    /// `verify` with an empty or > 16-byte nonce used to reach `finalize`'s
+    /// `assert!` and panic; it must now reject like VMAC's `verify`.
+    #[test]
+    fn verify_bad_nonce_rejects_without_panic() {
+        let key = [0x11u8; 16];
+        for nonce in [&[][..], &[0u8; 17][..], &[0u8; 64][..]] {
+            assert!(!Umac64::new(&key).verify(nonce, &[0u8; 8]));
+            assert!(!Umac128::new(&key).verify(nonce, &[0u8; 16]));
+        }
+        // Valid nonces still verify.
+        let n = [1u8; 8];
+        let t64 = Umac64::compute(&key, b"abc", &n);
+        let t128 = Umac128::compute(&key, b"abc", &n);
+        let mut m = Umac64::new(&key);
+        m.update(b"abc");
+        assert!(m.verify(&n, &t64));
+        let mut m = Umac128::new(&key);
+        m.update(b"abc");
+        assert!(m.verify(&n, &t128));
+    }
+    extern crate alloc;
+
+    fn from_hex<const N: usize>(s: &str) -> [u8; N] {
+        let bytes = s.as_bytes();
+        assert_eq!(bytes.len(), 2 * N, "hex string has wrong length");
+        let mut out = [0u8; N];
+        for i in 0..N {
+            let hi = (bytes[2 * i] as char).to_digit(16).expect("hex") as u8;
+            let lo = (bytes[2 * i + 1] as char).to_digit(16).expect("hex") as u8;
+            out[i] = (hi << 4) | lo;
+        }
+        out
+    }
+
+    // RFC 4418 §A.1 test vectors. The key is the ASCII string
+    // "abcdefghijklmnop", the nonce is the ASCII string "bcdefghi". The
+    // eight messages are an empty string, the byte string `'a'` repeated
+    // 3, 2^10, 2^15, 2^20, and 2^25 times, and `'abc'` repeated 1 and 500
+    // times.
+
+    const RFC_KEY: &[u8; 16] = b"abcdefghijklmnop";
+    const RFC_NONCE: &[u8; 8] = b"bcdefghi";
+
+    /// One RFC 4418 §A.1 test message: `pattern` repeated `reps` times.
+    struct RfcMsg {
+        pattern: &'static [u8],
+        reps: usize,
+    }
+
+    const RFC_VECTORS: [RfcMsg; 8] = [
+        RfcMsg {
+            pattern: b"",
+            reps: 0,
+        },
+        RfcMsg {
+            pattern: b"a",
+            reps: 3,
+        },
+        RfcMsg {
+            pattern: b"a",
+            reps: 1 << 10,
+        },
+        RfcMsg {
+            pattern: b"a",
+            reps: 1 << 15,
+        },
+        RfcMsg {
+            pattern: b"a",
+            reps: 1 << 20,
+        },
+        RfcMsg {
+            pattern: b"a",
+            reps: 1 << 25,
+        },
+        RfcMsg {
+            pattern: b"abc",
+            reps: 1,
+        },
+        RfcMsg {
+            pattern: b"abc",
+            reps: 500,
+        },
+    ];
+
+    /// Streams `pattern` repeated `reps` times into `f`, in 8-KiB chunks
+    /// so the largest 32-MiB case doesn't need a single allocation.
+    fn feed_pattern_repeated<F: FnMut(&[u8])>(pattern: &[u8], reps: usize, mut f: F) {
+        if pattern.is_empty() || reps == 0 {
+            return;
+        }
+        // Fill an 8-KiB buffer with whole repetitions of `pattern` so each
+        // emitted chunk is byte-identical to the underlying message stream.
+        let chunk_unit = 8192 / pattern.len().max(1) * pattern.len();
+        let chunk_unit = chunk_unit.max(pattern.len());
+        let mut buf = alloc::vec::Vec::with_capacity(chunk_unit);
+        while buf.len() < chunk_unit {
+            buf.extend_from_slice(pattern);
+        }
+        let total = pattern.len() * reps;
+        let mut remaining = total;
+        while remaining > 0 {
+            let take = remaining.min(buf.len());
+            f(&buf[..take]);
+            remaining -= take;
+        }
+    }
+
+    fn compute_umac64_msg(m: &RfcMsg) -> [u8; 8] {
+        let mut s = Umac64::new(RFC_KEY);
+        feed_pattern_repeated(m.pattern, m.reps, |b| s.update(b));
+        s.finalize(RFC_NONCE)
+    }
+
+    fn compute_umac_iter_msg<const ITER: usize>(m: &RfcMsg) -> [u8; 16] {
+        let mut inner = UmacInner::<ITER>::new(RFC_KEY);
+        feed_pattern_repeated(m.pattern, m.reps, |b| inner.update(b));
+        let mut tag = [0u8; 16];
+        let n = 4 * ITER;
+        inner.finalize_uhash(&mut tag[..n]);
+        match n {
+            8 => {
+                let pad = pdf_8(&inner.pdf_aes, RFC_NONCE);
+                for i in 0..8 {
+                    tag[i] ^= pad[i];
+                }
+            }
+            12 | 16 => {
+                let pad = pdf_16(&inner.pdf_aes, RFC_NONCE);
+                for i in 0..n {
+                    tag[i] ^= pad[i];
+                }
+            }
+            _ => unreachable!(),
+        }
+        tag
+    }
+
+    /// True if this vector's message size is small enough to run under
+    /// slow harnesses like miri.
+    fn vector_fits_miri(m: &RfcMsg) -> bool {
+        m.pattern.len() * m.reps <= 1 << 16
+    }
+
+    #[test]
+    fn rfc4418_umac64_vectors() {
+        // RFC 4418 §A.1: expected 8-byte tags. The 'a' * 2^25 vector applies
+        // the published RFC 4418 errata (17 March 2006); the original RFC
+        // value was generated by code that mishandled messages longer than
+        // 2^24 bytes (the POLY-64 → POLY-128 transition).
+        let expected: [[u8; 8]; 8] = [
+            from_hex("6E155FAD26900BE1"),
+            from_hex("44B5CB542F220104"),
+            from_hex("26BF2F5D60118BD9"),
+            from_hex("27F8EF643B0D118D"),
+            from_hex("A4477E87E9F55853"),
+            from_hex("FACA46F856E9B45F"), // errata: original was 2E2DBC36860A0A5F
+            from_hex("D4D7B9F6BD4FBFCF"),
+            from_hex("D4CF26DDEFD5C01A"),
+        ];
+        for (i, m) in RFC_VECTORS.iter().enumerate() {
+            if cfg!(miri) && !vector_fits_miri(m) {
+                continue;
+            }
+            let tag = compute_umac64_msg(m);
+            assert_eq!(
+                tag,
+                expected[i],
+                "UMAC-64 vector {} mismatch ({} x{})",
+                i,
+                core::str::from_utf8(m.pattern).unwrap_or("?"),
+                m.reps,
+            );
+        }
+    }
+
+    #[test]
+    fn rfc4418_umac96_vectors_via_iter3() {
+        // RFC 4418 §A.1: expected 12-byte tags (UMAC-96 = ITER=3). The
+        // 'a' * 2^25 entry uses the published errata value (the original
+        // RFC vector had a known generation bug at the POLY-128 boundary).
+        let expected: [[u8; 12]; 8] = [
+            from_hex("32FEDB100C79AD58F07FF764"),
+            from_hex("185E4FE905CBA7BD85E4C2DC"),
+            from_hex("7A54ABE04AF82D60FB298C3C"),
+            from_hex("7B136BD911E4B734286EF2BE"),
+            from_hex("F8ACFA3AC31CFEEA047F7B11"),
+            from_hex("A621C2457C0012E64F3FDAE9"), // errata
+            from_hex("883C3D4B97A61976FFCF2323"),
+            from_hex("8824A260C53C66A36C9260A6"),
+        ];
+        for (i, m) in RFC_VECTORS.iter().enumerate() {
+            if cfg!(miri) && !vector_fits_miri(m) {
+                continue;
+            }
+            let tag = compute_umac_iter_msg::<3>(m);
+            for j in 0..12 {
+                assert_eq!(
+                    tag[j],
+                    expected[i][j],
+                    "UMAC-96 vector {} mismatch at byte {} ({} x{})",
+                    i,
+                    j,
+                    core::str::from_utf8(m.pattern).unwrap_or("?"),
+                    m.reps,
+                );
+            }
+        }
+    }
+
+    // UMAC-128 has no RFC 4418 published test vectors, so we don't assert
+    // byte-exact tags here. The iter=2 and iter=3 tests above lock down the
+    // entire UHASH pipeline (NH / POLY-64 / POLY-128 / L3-HASH) against the
+    // spec; UMAC-128 reuses that same machinery with one extra iteration
+    // and the no-mask PDF, both of which are independently exercised below.
+
+    #[test]
+    fn verify_is_constant_time_and_length_strict() {
+        let key = b"abcdefghijklmnop";
+        let nonce = b"bcdefghi";
+        let msg = b"abc";
+
+        let mut state = Umac64::new(key);
+        state.update(msg);
+        let tag = Umac64::compute(key, msg, nonce);
+        assert!(state.clone().verify(nonce, &tag));
+        // A single flipped bit, a truncated prefix, an over-long tag and the
+        // empty slice must all be rejected; so must the right tag under the
+        // wrong nonce.
+        let mut bad = tag;
+        bad[0] ^= 1;
+        assert!(!state.clone().verify(nonce, &bad));
+        assert!(!state.clone().verify(nonce, &tag[..7]));
+        assert!(!state.clone().verify(nonce, &[]));
+        let mut long = [0u8; 9];
+        long[..8].copy_from_slice(&tag);
+        assert!(!state.clone().verify(nonce, &long));
+        assert!(!state.verify(b"bcdefghj", &tag));
+
+        let mut state = Umac128::new(key);
+        state.update(msg);
+        let tag = Umac128::compute(key, msg, nonce);
+        assert!(state.clone().verify(nonce, &tag));
+        let mut bad = tag;
+        bad[15] ^= 0x80;
+        assert!(!state.clone().verify(nonce, &bad));
+        assert!(!state.clone().verify(nonce, &tag[..15]));
+        assert!(!state.clone().verify(nonce, &[]));
+        // A UMAC-64 tag is not a valid (truncated) UMAC-128 tag.
+        assert!(!state.verify(nonce, &Umac64::compute(key, msg, nonce)));
+    }
+
+    #[test]
+    fn streaming_matches_one_shot() {
+        // Split a 2.5-MiB message at random byte offsets and confirm that
+        // the streamed tag matches the one-shot tag. This exercises the
+        // POLY-64 → POLY-128 transition (the input crosses 2¹⁷ bytes of L1
+        // output, which corresponds to ~16 MiB of message — too large for
+        // a unit test — so we only test the < 2¹⁷ side here; the RFC §A.1
+        // 2³⁰ tag above does cover the >2¹⁷ side).
+        let key = b"streamtestkey567";
+        let nonce = b"abcdef01";
+        let mut data = alloc::vec::Vec::with_capacity(2_500_000);
+        for i in 0..2_500_000usize {
+            data.push((i as u8).wrapping_mul(31).wrapping_add(7));
+        }
+
+        let one_shot = Umac64::compute(key, &data, nonce);
+
+        let mut state = Umac64::new(key);
+        // Irregular chunk sizes to flush partial buffers in many configs.
+        let splits: [usize; 9] = [1, 7, 511, 1024, 1023, 4097, 17, 600_000, 999_999];
+        let mut offset = 0;
+        let mut idx = 0;
+        while offset < data.len() {
+            let take = splits[idx % splits.len()].min(data.len() - offset);
+            state.update(&data[offset..offset + take]);
+            offset += take;
+            idx += 1;
+        }
+        let streamed = state.finalize(nonce);
+
+        assert_eq!(one_shot, streamed);
+    }
+
+    /// `l1_chunk` over pre-converted key words, hashing whole 32-byte steps
+    /// in place, must equal the byte-wise RFC 4418 §5.2 definition (copy and
+    /// zero-pad the chunk, read key words big-endian per step) for every
+    /// chunk length.
+    #[test]
+    fn l1_chunk_matches_bytewise_reference() {
+        fn reference(key: &[u8], data: &[u8], bit_length: u64) -> u64 {
+            let pad_len = data.len().div_ceil(32).max(1) * 32;
+            let mut buf = [0u8; L1_KEY_LEN];
+            buf[..data.len()].copy_from_slice(data);
+            let mut y = 0u64;
+            for i in (0..pad_len).step_by(32) {
+                let w = |src: &[u8], j: usize| -> [u8; 4] {
+                    src[i + 4 * j..i + 4 * j + 4].try_into().unwrap()
+                };
+                for j in 0..4 {
+                    let a =
+                        u32::from_le_bytes(w(&buf, j)).wrapping_add(u32::from_be_bytes(w(key, j)));
+                    let b = u32::from_le_bytes(w(&buf, j + 4))
+                        .wrapping_add(u32::from_be_bytes(w(key, j + 4)));
+                    y = y.wrapping_add((a as u64).wrapping_mul(b as u64));
+                }
+            }
+            y.wrapping_add(bit_length)
+        }
+        let key_bytes: [u8; L1_KEY_LEN] = core::array::from_fn(|i| (i as u8) ^ 0x9c);
+        let mut key = [0u32; L1_KEY_LEN / 4];
+        for (w, b) in key.iter_mut().zip(key_bytes.chunks_exact(4)) {
+            *w = u32::from_be_bytes(b.try_into().unwrap());
+        }
+        let data: [u8; L1_KEY_LEN] = core::array::from_fn(|i| (i as u8).wrapping_mul(77));
+        for len in 0..=L1_KEY_LEN {
+            let bits = 8 * len as u64;
+            assert_eq!(
+                l1_chunk(&key, &data[..len], bits),
+                reference(&key_bytes, &data[..len], bits),
+                "len {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn umac128_streaming_matches_one_shot() {
+        let key = b"128streamkey7890";
+        let nonce = b"01234567";
+        let mut data = alloc::vec::Vec::with_capacity(50_000);
+        for i in 0..50_000usize {
+            data.push((i as u8).wrapping_mul(13).wrapping_add(5));
+        }
+        let one_shot = Umac128::compute(key, &data, nonce);
+        let mut state = Umac128::new(key);
+        let splits: [usize; 6] = [1, 31, 1024, 17, 10_000, 4097];
+        let mut offset = 0;
+        let mut idx = 0;
+        while offset < data.len() {
+            let take = splits[idx % splits.len()].min(data.len() - offset);
+            state.update(&data[offset..offset + take]);
+            offset += take;
+            idx += 1;
+        }
+        let streamed = state.finalize(nonce);
+        assert_eq!(one_shot, streamed);
+    }
+
+    /// The branchless POLY steps and the folded `mod p36` must agree with the
+    /// textbook branchy/`%` forms on every input class, in particular the rare
+    /// marker range `m >= MAXWR` that the RFC vectors never reach.
+    #[test]
+    fn branchless_arithmetic_matches_reference() {
+        fn poly64_ref(k: u64, acc: u64, m: u64) -> u64 {
+            fn add(a: u64, b: u64) -> u64 {
+                let (s, c) = a.overflowing_add(b);
+                let s = if c { s.wrapping_add(OFFSET_64) } else { s };
+                if s >= P64 { s - P64 } else { s }
+            }
+            if m >= MAXWR_64 {
+                let t = add(mul_mod_p64(k, acc), P64 - 1);
+                add(mul_mod_p64(k, t), m - OFFSET_64)
+            } else {
+                add(mul_mod_p64(k, acc), m)
+            }
+        }
+        fn poly128_ref(k: u128, acc: u128, m: u128) -> u128 {
+            fn add(a: u128, b: u128) -> u128 {
+                let (s, c) = a.overflowing_add(b);
+                let s = if c { s.wrapping_add(OFFSET_128) } else { s };
+                if s >= P128 { s - P128 } else { s }
+            }
+            if m >= MAXWR_128 {
+                let t = add(mul_mod_p128(k, acc), P128 - 1);
+                add(mul_mod_p128(k, t), m - OFFSET_128)
+            } else {
+                add(mul_mod_p128(k, acc), m)
+            }
+        }
+
+        let mut s = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+
+        // Edge cases around the marker threshold and the moduli.
+        let edges64 = [
+            0u64,
+            1,
+            MAXWR_64 - 1,
+            MAXWR_64,
+            MAXWR_64 + 1,
+            P64 - 1,
+            P64,
+            P64 + 1,
+            u64::MAX,
+        ];
+        for &m in &edges64 {
+            for &acc in &[0u64, 1, P64 - 1, u64::MAX / 3] {
+                let k = 0x0123_4567_89ab_cdefu64 & MASK64;
+                let mut got = acc;
+                poly64_step(k, &mut got, m);
+                assert_eq!(got, poly64_ref(k, acc, m), "poly64 m={m:#x} acc={acc:#x}");
+            }
+        }
+        let edges128 = [
+            0u128,
+            1,
+            MAXWR_128 - 1,
+            MAXWR_128,
+            MAXWR_128 + 1,
+            P128 - 1,
+            P128,
+            P128 + 1,
+            u128::MAX,
+        ];
+        for &m in &edges128 {
+            for &acc in &[0u128, 1, P128 - 1, u128::MAX / 3] {
+                let k = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdefu128 & MASK128;
+                let mut got = acc;
+                poly128_step(k, &mut got, m);
+                assert_eq!(got, poly128_ref(k, acc, m), "poly128 m={m:#x}");
+            }
+        }
+
+        for _ in 0..5_000 {
+            let k = next() & MASK64;
+            let acc = next() % P64;
+            // Half the inputs land in the marker range.
+            let m = if next() & 1 == 0 {
+                next()
+            } else {
+                MAXWR_64 | (next() & 0xffff_ffff)
+            };
+            let mut got = acc;
+            poly64_step(k, &mut got, m);
+            assert_eq!(got, poly64_ref(k, acc, m), "poly64 rand m={m:#x}");
+
+            let k128 = (((next() as u128) << 64) | next() as u128) & MASK128;
+            let acc128 = (((next() as u128) << 64) | next() as u128) % P128;
+            let m128 = if next() & 1 == 0 {
+                ((next() as u128) << 64) | next() as u128
+            } else {
+                MAXWR_128 | ((next() as u128) & 0xffff_ffff)
+            };
+            let mut got128 = acc128;
+            poly128_step(k128, &mut got128, m128);
+            assert_eq!(
+                got128,
+                poly128_ref(k128, acc128, m128),
+                "poly128 rand m={m128:#x}"
+            );
+
+            // L3-HASH inputs are < 2⁵⁵; the L3 key words use the full range.
+            let x = next() >> 9;
+            assert_eq!(reduce_p36(x), x % P36, "reduce_p36 x={x:#x}");
+            let x = next();
+            assert_eq!(reduce_p36(x), x % P36, "reduce_p36 full-range x={x:#x}");
+        }
+        for &x in &[
+            0u64,
+            1,
+            P36 - 1,
+            P36,
+            P36 + 1,
+            1 << 36,
+            (1u64 << 55) - 1,
+            1 << 55,
+            u64::MAX - P36,
+            u64::MAX,
+        ] {
+            assert_eq!(reduce_p36(x), x % P36, "reduce_p36 edge x={x:#x}");
+        }
+    }
+}

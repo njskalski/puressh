@@ -1,40 +1,52 @@
 //! `aes*-ctr` (RFC 4344) — non-AEAD streaming ciphers paired with a separate MAC.
 
-use purecrypto::cipher::{Aes128, Aes192, Aes256, Ctr};
+use crate::crypto::cipher::{Aes128Ctr, Aes192Ctr, Aes256Ctr};
 
 use crate::error::{Error, Result};
 
 // No `Clone`: each variant holds a live CTR keystream position; cloning would
 // resume the same counter twice and reuse keystream under the same key.
 pub enum AesCtr {
-    Aes128(Ctr<Aes128>),
-    Aes192(Ctr<Aes192>),
-    Aes256(Ctr<Aes256>),
+    Aes128(Aes128Ctr),
+    Aes192(Aes192Ctr),
+    Aes256(Aes256Ctr),
 }
 
 impl AesCtr {
     pub(crate) fn new_128(key: &[u8], iv: &[u8]) -> Result<Self> {
-        let k: &[u8; 16] = key
-            .try_into()
-            .map_err(|_| Error::Format("aes128-ctr key len"))?;
-        let i: &[u8; 16] = iv.try_into().map_err(|_| Error::Format("aes-ctr iv len"))?;
-        Ok(AesCtr::Aes128(Ctr::new(Aes128::new(k), i)))
+        if key.len() != 16 {
+            return Err(Error::Format("aes128-ctr key len"));
+        }
+        if iv.len() != 16 {
+            return Err(Error::Format("aes-ctr iv len"));
+        }
+        Aes128Ctr::new(key, iv)
+            .map(AesCtr::Aes128)
+            .map_err(|_| Error::Format("aes128-ctr key len"))
     }
 
     pub(crate) fn new_192(key: &[u8], iv: &[u8]) -> Result<Self> {
-        let k: &[u8; 24] = key
-            .try_into()
-            .map_err(|_| Error::Format("aes192-ctr key len"))?;
-        let i: &[u8; 16] = iv.try_into().map_err(|_| Error::Format("aes-ctr iv len"))?;
-        Ok(AesCtr::Aes192(Ctr::new(Aes192::new(k), i)))
+        if key.len() != 24 {
+            return Err(Error::Format("aes192-ctr key len"));
+        }
+        if iv.len() != 16 {
+            return Err(Error::Format("aes-ctr iv len"));
+        }
+        Aes192Ctr::new(key, iv)
+            .map(AesCtr::Aes192)
+            .map_err(|_| Error::Format("aes192-ctr key len"))
     }
 
     pub(crate) fn new_256(key: &[u8], iv: &[u8]) -> Result<Self> {
-        let k: &[u8; 32] = key
-            .try_into()
-            .map_err(|_| Error::Format("aes256-ctr key len"))?;
-        let i: &[u8; 16] = iv.try_into().map_err(|_| Error::Format("aes-ctr iv len"))?;
-        Ok(AesCtr::Aes256(Ctr::new(Aes256::new(k), i)))
+        if key.len() != 32 {
+            return Err(Error::Format("aes256-ctr key len"));
+        }
+        if iv.len() != 16 {
+            return Err(Error::Format("aes-ctr iv len"));
+        }
+        Aes256Ctr::new(key, iv)
+            .map(AesCtr::Aes256)
+            .map_err(|_| Error::Format("aes256-ctr key len"))
     }
 
     pub(crate) fn apply_keystream(&mut self, buf: &mut [u8]) {

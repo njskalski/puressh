@@ -42,8 +42,8 @@ mod unix_sys;
 use std::path::Path;
 use std::process::ExitCode;
 
-use purecrypto::rng::{OsRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use puressh::crypto::rng::{OsRng, RngCore};
+use puressh::crypto::zeroize::Zeroizing;
 use puressh::key::{EcdsaCurve, PrivateKey, PublicKey};
 
 /// Open a file with `create_new` semantics, applying the requested Unix mode
@@ -1033,18 +1033,18 @@ fn fingerprint_text(pk: &PublicKey, args: &Args) -> Result<String, String> {
 }
 
 fn sha1(data: &[u8]) -> Vec<u8> {
-    use purecrypto::hash::{Digest, Sha1};
-    Sha1::digest(data).as_ref().to_vec()
+    use puressh::crypto::hash::{Digest, Sha1};
+    Sha1::digest(data).to_vec()
 }
 
 fn md5(data: &[u8]) -> Vec<u8> {
-    use purecrypto::hash::{Digest, Md5};
-    Md5::digest(data).as_ref().to_vec()
+    use puressh::crypto::hash::{Digest, Md5};
+    Md5::digest(data).to_vec()
 }
 
 fn sha256(data: &[u8]) -> Vec<u8> {
-    use purecrypto::hash::{Digest, Sha256};
-    Sha256::digest(data).as_ref().to_vec()
+    use puressh::crypto::hash::{Digest, Sha256};
+    Sha256::digest(data).to_vec()
 }
 
 /// OpenSSH's bubblebabble encoding of a digest (`ssh-keygen -B`).
@@ -1275,10 +1275,10 @@ fn encode_private(sk: &PrivateKey, args: &Args, passphrase: &str) -> Result<Stri
         }
         .map_err(|e| format!("encode: {e}")),
         "PEM" if !passphrase.is_empty() => sk
-            .to_traditional_pem_encrypted(&mut purecrypto::rng::OsRng, passphrase.as_bytes())
+            .to_traditional_pem_encrypted(&mut puressh::crypto::rng::OsRng, passphrase.as_bytes())
             .map_err(|e| format!("invalid format: {e}")),
         "PKCS8" if !passphrase.is_empty() => sk
-            .to_pkcs8_pem_encrypted(&mut purecrypto::rng::OsRng, passphrase.as_bytes())
+            .to_pkcs8_pem_encrypted(&mut puressh::crypto::rng::OsRng, passphrase.as_bytes())
             .map_err(|e| format!("invalid format: {e}")),
         "PEM" => sk
             .to_traditional_pem()
@@ -2551,7 +2551,7 @@ mod krl {
         while padded.len() % 4 != 0 {
             padded.push('=');
         }
-        let raw = purecrypto::der::base64_decode(&padded).ok()?;
+        let raw = puressh::crypto::der::base64_decode(&padded).ok()?;
         let want = if sha256 { 32 } else { 20 };
         (raw.len() == want).then_some((sha256, raw))
     }
@@ -2717,10 +2717,10 @@ mod krl {
 /// `-s` / `-L`: OpenSSH certificates.
 mod certs {
     use super::{Args, PublicKey, algorithm_label, format_local_time, local_offset, now};
-    use purecrypto::rng::{OsRng, RngCore};
     use puressh::cert::{
         CertType, Certificate, CertificateBuilder, DEFAULT_USER_EXTENSIONS, encode_option_string,
     };
+    use puressh::crypto::rng::{OsRng, RngCore};
 
     /// `[+-]1w2d3h4m5s` relative to `now`.
     fn parse_relative(s: &str, now: u64) -> Option<u64> {
@@ -3212,8 +3212,8 @@ mod tests {
 /// `/etc/ssh/moduli` format.
 mod moduli {
     use super::{Args, local_offset, now};
-    use purecrypto::bignum::{BoxedMontModulus, BoxedUint};
-    use purecrypto::rng::{OsRng, RngCore};
+    use puressh::crypto::bignum::{BoxedUint, MontModulus};
+    use puressh::crypto::rng::{OsRng, RngCore};
     use std::io::{BufRead, Write};
 
     const MODULI_TYPE_UNKNOWN: u32 = 0;
@@ -3363,7 +3363,9 @@ mod moduli {
         }
         let len = n.len();
         let nn = BoxedUint::from_be_bytes(n);
-        let mont = BoxedMontModulus::new(&nn);
+        let Some(mont) = MontModulus::new(&nn) else {
+            return false;
+        };
         let mut n1 = n.to_vec();
         n1[len - 1] &= 0xfe; // n - 1 (n is odd)
         let n_minus_1 = BoxedUint::from_be_bytes(&n1);
@@ -3851,8 +3853,8 @@ mod security_key {
         Args, RAW, ask, encode_private, read_new_passphrase_confirmed, read_passphrase_interactive,
         write_private, write_public,
     };
-    use purecrypto::zeroize::Zeroizing;
     use puressh::Error;
+    use puressh::crypto::zeroize::Zeroizing;
     use puressh::key::PrivateKey;
     use puressh::sk::{self, Algorithm, SkError};
     use std::io::Write;

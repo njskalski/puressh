@@ -15,8 +15,8 @@ use alloc::vec::Vec;
 use std::ffi::{c_uchar, c_ulong, c_void};
 use std::sync::Mutex;
 
-use purecrypto::hash::{Digest, Sha1, Sha256, Sha384, Sha512};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::hash::{Digest, Sha1, Sha256, Sha384, Sha512};
+use crate::crypto::zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::format::{Writer, write_mpint};
@@ -327,18 +327,14 @@ impl Pkcs11Key {
                     "rsa-sha2-512" => (
                         "rsa-sha2-512",
                         DIGEST_INFO_SHA512,
-                        Sha512::digest(data).as_ref().to_vec(),
+                        Sha512::digest(data).to_vec(),
                     ),
                     "rsa-sha2-256" => (
                         "rsa-sha2-256",
                         DIGEST_INFO_SHA256,
-                        Sha256::digest(data).as_ref().to_vec(),
+                        Sha256::digest(data).to_vec(),
                     ),
-                    "ssh-rsa" => (
-                        "ssh-rsa",
-                        DIGEST_INFO_SHA1,
-                        Sha1::digest(data).as_ref().to_vec(),
-                    ),
+                    "ssh-rsa" => ("ssh-rsa", DIGEST_INFO_SHA1, Sha1::digest(data).to_vec()),
                     _ => return Err(Error::Unsupported("pkcs11: RSA signature algorithm")),
                 };
                 let mut input = Zeroizing::new(prefix.to_vec());
@@ -358,9 +354,9 @@ impl Pkcs11Key {
             | PublicKey::EcdsaP384 { .. }
             | PublicKey::EcdsaP521 { .. } => {
                 let digest = match &self.public {
-                    PublicKey::EcdsaP256 { .. } => Sha256::digest(data).as_ref().to_vec(),
-                    PublicKey::EcdsaP384 { .. } => Sha384::digest(data).as_ref().to_vec(),
-                    _ => Sha512::digest(data).as_ref().to_vec(),
+                    PublicKey::EcdsaP256 { .. } => Sha256::digest(data).to_vec(),
+                    PublicKey::EcdsaP384 { .. } => Sha384::digest(data).to_vec(),
+                    _ => Sha512::digest(data).to_vec(),
                 };
                 let sig = self.sign_raw(CKM_ECDSA, &digest, 132)?;
                 if !(64..=132).contains(&sig.len()) || sig.len() % 2 != 0 {
@@ -720,7 +716,7 @@ fn ec_curve(params: &[u8]) -> Option<(&'static str, &'static str)> {
 /// `CKA_EC_POINT`: a DER OCTET STRING holding the point (some tokens give
 /// the bare point).
 fn ec_point(v: &[u8]) -> &[u8] {
-    let mut r = purecrypto::der::Reader::new(v);
+    let mut r = crate::crypto::der::Reader::new(v);
     match r.read_octet_string() {
         Ok(p) if r.is_empty() => p,
         _ => v,

@@ -9,9 +9,9 @@ use std::net::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use purecrypto::ct::ConstantTimeEq;
-use purecrypto::rng::{OsRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ct::ConstantTimeEq;
+use crate::crypto::rng::{OsRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::state::{DropReason, KnockState, Verdict};
 use super::wire::MAX_DATAGRAM;

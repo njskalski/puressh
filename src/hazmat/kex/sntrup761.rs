@@ -10,9 +10,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use purecrypto::hash::{Digest, Sha512};
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::{Zeroize, Zeroizing};
+use crate::crypto::hash::{Digest, Sha512};
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::{Zeroize, Zeroizing};
 
 const P: usize = 761;
 const Q: i32 = 4591;
@@ -456,11 +456,11 @@ fn short_fromlist(input: &[u32]) -> Vec<Small> {
 /// The first 32 bytes of `SHA-512(b || input)`.
 fn hash_prefix(b: u8, input: &[u8]) -> [u8; HASH_BYTES] {
     let mut h = Sha512::new();
-    h.update(&[b]);
+    h.update([b]);
     h.update(input);
     let d = h.finalize();
     let mut out = [0u8; HASH_BYTES];
-    out.copy_from_slice(&d.as_ref()[..HASH_BYTES]);
+    out.copy_from_slice(&d[..HASH_BYTES]);
     out
 }
 
@@ -654,9 +654,9 @@ pub fn decapsulate(c: &[u8], sk: &[u8]) -> Zeroizing<[u8; SHARED_SECRET_BYTES]> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::rng::HmacDrbg;
+    use crate::crypto::rng::HmacDrbg;
 
-    fn rng(seed: u8) -> HmacDrbg<purecrypto::hash::Sha256> {
+    fn rng(seed: u8) -> HmacDrbg<crate::crypto::hash::Sha256> {
         HmacDrbg::new(&[seed; 32], &[], &[])
     }
 

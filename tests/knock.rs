@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use purecrypto::rng::{OsRng, RngCore};
 use puressh::auth::{AuthAttempt, AuthDecision, Authenticator};
 use puressh::client::{
     Client, Config as ClientConfig, HostKeyPolicy, KnownHostsPolicy, TofuAction,
 };
+use puressh::crypto::rng::{OsRng, RngCore};
 use puressh::hostkey::{Ed25519HostKey, HostKey};
 use puressh::knock::{
     Connected, KnockConnectOptions, KnockIdentity, KnockKeyTable, KnockMode, KnockRequest,

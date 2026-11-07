@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use purecrypto::rng::{CryptoRng, OsRng, RngCore};
+use crate::crypto::rng::{CryptoRng, OsRng, RngCore};
 
 use crate::error::{Error, Result};
 use crate::hostkey::HostKey;

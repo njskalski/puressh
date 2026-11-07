@@ -12,9 +12,9 @@
 //! continue to see the same function names, signatures, and error
 //! semantics.
 
+use crate::crypto::zeroize::Zeroizing;
 use core::ffi::{c_char, c_int};
 use core::ptr;
-use purecrypto::zeroize::Zeroizing;
 use std::ffi::CStr;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::slice;

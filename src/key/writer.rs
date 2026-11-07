@@ -8,16 +8,15 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use purecrypto::bignum::{BoxedUint, inv_mod_boxed};
-use purecrypto::der::Reader as DerReader;
-use purecrypto::ec::{BoxedEcdsaPrivateKey, CurveId, Ed25519PrivateKey};
-use purecrypto::hash::{Digest, Sha256};
-use purecrypto::kdf::bcrypt_pbkdf;
+use crate::crypto::bignum::BoxedUint;
+use crate::crypto::ec::{CurveId, EcdsaPrivateKey, Ed25519PrivateKey};
+use crate::crypto::hash::{Digest, Sha256};
+use crate::crypto::kdf::bcrypt_pbkdf;
 #[cfg(feature = "std")]
-use purecrypto::rng::OsRng;
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::rsa::BoxedRsaPrivateKey;
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::rng::OsRng;
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::rsa::RsaPrivateKey;
+use crate::crypto::zeroize::Zeroizing;
 
 use super::kcipher::KeyCipher;
 use super::{MAGIC, PrivateKey, PublicKey, base64};
@@ -56,7 +55,7 @@ impl PublicKey {
     /// SHA-256 fingerprint of the wire-format public-key blob, formatted as
     /// `"SHA256:<base64>"` with no `=` padding — matches `ssh-keygen -lf`.
     pub fn sha256_fingerprint(&self) -> String {
-        let digest = Sha256::digest(&self.wire_blob());
+        let digest = Sha256::digest(self.wire_blob());
         let mut s = base64::encode(&digest);
         while s.ends_with('=') {
             s.pop();
@@ -72,14 +71,14 @@ impl PublicKey {
     /// `sha256`, `sha384` or `sha512`, in any case (`-E`). `None` for
     /// another name.
     pub fn fingerprint_digest(&self, hash: &str) -> Option<(&'static str, Vec<u8>)> {
-        use purecrypto::hash::{Md5, Sha1, Sha384, Sha512};
+        use crate::crypto::hash::{Md5, Sha1, Sha384, Sha512};
         let blob = self.wire_blob();
         Some(match hash.to_ascii_lowercase().as_str() {
-            "md5" => ("MD5", Md5::digest(&blob).as_ref().to_vec()),
-            "sha1" => ("SHA1", Sha1::digest(&blob).as_ref().to_vec()),
-            "sha256" => ("SHA256", Sha256::digest(&blob).as_ref().to_vec()),
-            "sha384" => ("SHA384", Sha384::digest(&blob).as_ref().to_vec()),
-            "sha512" => ("SHA512", Sha512::digest(&blob).as_ref().to_vec()),
+            "md5" => ("MD5", Md5::digest(&blob).to_vec()),
+            "sha1" => ("SHA1", Sha1::digest(&blob).to_vec()),
+            "sha256" => ("SHA256", Sha256::digest(&blob).to_vec()),
+            "sha384" => ("SHA384", Sha384::digest(&blob).to_vec()),
+            "sha512" => ("SHA512", Sha512::digest(&blob).to_vec()),
             _ => return None,
         })
     }
@@ -171,14 +170,14 @@ impl PrivateKey {
         curve: EcdsaCurve,
         comment: String,
     ) -> Self {
-        let (cid, order_len) = match curve {
-            EcdsaCurve::P256 => (CurveId::P256, 32usize),
-            EcdsaCurve::P384 => (CurveId::P384, 48),
-            EcdsaCurve::P521 => (CurveId::P521, 66),
+        let cid = match curve {
+            EcdsaCurve::P256 => CurveId::P256,
+            EcdsaCurve::P384 => CurveId::P384,
+            EcdsaCurve::P521 => CurveId::P521,
         };
-        let sk = BoxedEcdsaPrivateKey::generate(cid, rng);
+        let sk = EcdsaPrivateKey::generate(cid, rng);
         let point = sk.public_key().to_sec1();
-        let d = scalar_from_ecdsa(&sk, order_len);
+        let d = scalar_from_ecdsa(&sk);
         match curve {
             EcdsaCurve::P256 => PrivateKey::EcdsaP256 { d, point, comment },
             EcdsaCurve::P384 => PrivateKey::EcdsaP384 { d, point, comment },
@@ -196,11 +195,14 @@ impl PrivateKey {
             return Err(Error::Crypto("rsa: invalid key size"));
         }
         let e_u = BoxedUint::from_u64(65537);
-        let sk = BoxedRsaPrivateKey::generate(bits, e_u, rng, 40);
-        let RsaComponents { n, e, d, p, q } = rsa_components_from_pkcs1(&sk)?;
+        let sk = RsaPrivateKey::generate(bits, e_u, rng)
+            .map_err(|_| Error::Crypto("rsa: key generation failed"))?;
+        let RsaComponents { n, e, d, p, q } = rsa_components(&sk)?;
         let p_u = BoxedUint::from_be_bytes(strip_leading_zeros(&p));
         let q_u = BoxedUint::from_be_bytes(strip_leading_zeros(&q));
-        let iqmp_u = inv_mod_boxed(&q_u, &p_u).ok_or(Error::Crypto("rsa: gcd(p,q) != 1"))?;
+        let iqmp_u = q_u
+            .inv_mod(&p_u)
+            .ok_or(Error::Crypto("rsa: gcd(p,q) != 1"))?;
         let iqmp_len = strip_leading_zeros(&p).len();
         let iqmp = iqmp_u.to_be_bytes(iqmp_len);
         Ok(PrivateKey::Rsa {
@@ -358,7 +360,7 @@ impl PrivateKey {
     /// bytes in an agent message frame (`encode_message`).
     ///
     /// The returned `Vec` contains the cleartext private key; callers
-    /// should wrap it in [`purecrypto::zeroize::Zeroizing`] (as the agent client does)
+    /// should wrap it in [`crate::crypto::zeroize::Zeroizing`] (as the agent client does)
     /// so it is wiped once the request has been written.
     pub fn to_agent_add_body(&self) -> Vec<u8> {
         let mut w = Writer::new();
@@ -649,27 +651,8 @@ fn wrap_pem(b64: &str) -> String {
     out
 }
 
-fn scalar_from_ecdsa(sk: &BoxedEcdsaPrivateKey, order_len: usize) -> Vec<u8> {
-    // BoxedEcdsaPrivateKey exposes its scalar only through to_sec1_der, which
-    // wraps the scalar as an OCTET STRING inside an ECPrivateKey SEQUENCE.
-    let der = sk.to_sec1_der();
-    if let Some(d) = parse_sec1_priv_octet(&der, order_len) {
-        return d;
-    }
-    alloc::vec![0]
-}
-
-fn parse_sec1_priv_octet(der: &[u8], order_len: usize) -> Option<Vec<u8>> {
-    let mut outer = DerReader::new(der);
-    let mut seq = outer.read_sequence().ok()?;
-    let _ver = seq.read_integer_bytes().ok()?;
-    let priv_bytes = seq.read_octet_string().ok()?;
-    if priv_bytes.len() < order_len {
-        let mut v = alloc::vec![0u8; order_len];
-        v[order_len - priv_bytes.len()..].copy_from_slice(priv_bytes);
-        return Some(v);
-    }
-    Some(priv_bytes.to_vec())
+fn scalar_from_ecdsa(sk: &EcdsaPrivateKey) -> Vec<u8> {
+    sk.to_bytes().to_vec()
 }
 
 fn strip_leading_zeros(b: &[u8]) -> &[u8] {
@@ -688,34 +671,16 @@ struct RsaComponents {
     q: Vec<u8>,
 }
 
-fn rsa_components_from_pkcs1(sk: &BoxedRsaPrivateKey) -> Result<RsaComponents> {
-    let der = sk.to_pkcs1_der();
-    let mut outer = DerReader::new(&der);
-    let mut seq = outer
-        .read_sequence()
-        .map_err(|_| Error::Format("rsa: bad pkcs1 sequence"))?;
-    let _ver = seq
-        .read_integer_bytes()
-        .map_err(|_| Error::Format("rsa: bad version"))?;
-    let n = seq
-        .read_integer_bytes()
-        .map_err(|_| Error::Format("rsa: bad n"))?
-        .to_vec();
-    let e = seq
-        .read_integer_bytes()
-        .map_err(|_| Error::Format("rsa: bad e"))?
-        .to_vec();
-    let d = seq
-        .read_integer_bytes()
-        .map_err(|_| Error::Format("rsa: bad d"))?
-        .to_vec();
-    let p = seq
-        .read_integer_bytes()
-        .map_err(|_| Error::Format("rsa: bad p"))?
-        .to_vec();
-    let q = seq
-        .read_integer_bytes()
-        .map_err(|_| Error::Format("rsa: bad q"))?
-        .to_vec();
-    Ok(RsaComponents { n, e, d, p, q })
+fn rsa_components(sk: &RsaPrivateKey) -> Result<RsaComponents> {
+    let (p, q) = sk
+        .primes()
+        .ok_or(Error::Crypto("rsa: generated key has no prime factors"))?;
+    let mag = |u: &BoxedUint| u.to_be_bytes_trimmed();
+    Ok(RsaComponents {
+        n: mag(&sk.modulus()),
+        e: mag(&sk.exponent()),
+        d: mag(&sk.private_exponent()),
+        p: mag(&p),
+        q: mag(&q),
+    })
 }

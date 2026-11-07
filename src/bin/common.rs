@@ -29,12 +29,12 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use purecrypto::zeroize::Zeroizing;
 use puressh::Error;
 #[cfg(unix)]
 use puressh::agent::{Agent, AgentHostKey};
 use puressh::auth::ClientCredential;
 use puressh::client::{HostKeyPolicy, KnownHostsPolicy, TofuAction};
+use puressh::crypto::zeroize::Zeroizing;
 use puressh::key::PrivateKey;
 use puressh::known_hosts::KnownHosts;
 
@@ -1226,7 +1226,7 @@ pub fn default_known_hosts_path() -> Option<PathBuf> {
 /// SHA-256 fingerprint, base64-encoded (no padding), formatted as
 /// `SHA256:<base64>` — matches `ssh-keygen -lf`.
 pub fn fingerprint_b64_sha256(blob: &[u8]) -> String {
-    use purecrypto::hash::{Digest, Sha256};
+    use puressh::crypto::hash::{Digest, Sha256};
     let digest = Sha256::digest(blob);
     let s = base64_no_pad(digest.as_ref());
     format!("SHA256:{s}")

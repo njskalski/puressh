@@ -17,8 +17,8 @@
 
 //! puressh — a pure-Rust SSH (Secure Shell) protocol library.
 //!
-//! Built on [`purecrypto`] for all cryptographic primitives, with no
-//! foreign code in the dependency tree.
+//! Built on the RustCrypto crates and the dalek curves for all cryptographic
+//! primitives (see [`crypto`]), with no foreign code in the dependency tree.
 //!
 //! The public API comes in three tiers:
 //!
@@ -66,12 +66,12 @@
 //!   (tokio via compat, smol, async-std, …) with no runtime dependency of its
 //!   own.
 //!
-//! [`purecrypto`]: https://crates.io/crates/purecrypto
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
 pub mod auth;
+pub mod crypto;
 pub mod error;
 pub mod hazmat;
 pub mod hostkey;

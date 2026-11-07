@@ -42,13 +42,13 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::x25519::X25519PrivateKey;
-use purecrypto::hash::{Digest, Sha256};
-use purecrypto::mlkem::{
+use crate::crypto::ec::X25519PrivateKey;
+use crate::crypto::hash::{Digest, Sha256};
+use crate::crypto::mlkem::{
     MlKem768Ciphertext, MlKem768DecapsKey, MlKem768EncapsKey, SHARED_SECRET_BYTES,
 };
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::Kex;
 use super::common::{
@@ -118,8 +118,8 @@ fn combine_secrets(
     k_ecdh: &Zeroizing<[u8; 32]>,
 ) -> Zeroizing<[u8; 32]> {
     let mut h = Sha256::new();
-    h.update(&**k_pq);
-    h.update(&**k_ecdh);
+    h.update(**k_pq);
+    h.update(**k_ecdh);
     let digest = h.finalize();
     let mut out = Zeroizing::new([0u8; 32]);
     out.copy_from_slice(digest.as_ref());
@@ -332,9 +332,9 @@ impl MlKem768X25519Sha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::rng::HmacDrbg;
     use crate::hostkey::{Ed25519HostKey, HostKey};
     use crate::transport::version::LOCAL_VERSION;
-    use purecrypto::rng::HmacDrbg;
 
     fn ctx() -> ([u8; 8], [u8; 8], [u8; 4], [u8; 4]) {
         // Fixed pseudo-context for the round-trip test. The exact contents

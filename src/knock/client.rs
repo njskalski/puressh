@@ -7,9 +7,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs,
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use purecrypto::ec::x25519::X25519PrivateKey;
-use purecrypto::rng::OsRng;
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ec::X25519PrivateKey;
+use crate::crypto::rng::OsRng;
+use crate::crypto::zeroize::Zeroizing;
 
 use super::server::unix_ms;
 use super::wire::{self, Accept, KnockFields, MAX_DATAGRAM};

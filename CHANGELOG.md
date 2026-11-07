@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- *(crypto)* every cryptographic primitive now comes from the RustCrypto crates
+  (`sha1`/`sha2`/`md-5`/`hmac`, `aes`/`ctr`/`aes-gcm`, `chacha20`/`poly1305`,
+  `des`, `p256`/`p384`/`p521`/`ecdsa`, `rsa`, `crypto-bigint`, `ml-kem`,
+  `ml-dsa`, `pbkdf2`/`bcrypt-pbkdf`/`hkdf`, `zeroize`, `subtle`, `base64ct`)
+  and `x25519-dalek` / `ed25519-dalek`, behind the new `puressh::crypto`
+  facade; the `purecrypto` dependency is gone. UMAC, which has no RustCrypto
+  implementation, is carried over from `purecrypto` (MIT) on top of `aes`.
+  `.cargo/config.toml` pins every crate to its portable software backend so
+  no CPU-intrinsic (`unsafe`) code paths are compiled. The OS RNG reads
+  `/dev/urandom` through `std` instead of calling `getrandom(2)`.
+- *(crypto)* Ed25519 verification is strict (canonical encodings, no
+  small-order public keys); RSA public exponents are additionally capped at
+  2^33 by the backend; ECDSA keys and signatures are parsed by the curve
+  crates, which reject off-curve points and out-of-range scalars.
+
 ## [0.2.8](https://github.com/KarpelesLab/puressh/compare/v0.2.7...v0.2.8) - 2026-10-31
 
 ### Added

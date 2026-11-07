@@ -155,7 +155,7 @@ pub fn lookup_with(rc: &ResolvConf, name: &str, rtype: u16) -> Result<RrSet, Dns
 
 /// A random query ID.
 fn query_id() -> u16 {
-    use purecrypto::rng::{OsRng, RngCore};
+    use puressh::crypto::rng::{OsRng, RngCore};
     let mut b = [0u8; 2];
     OsRng.fill_bytes(&mut b);
     u16::from_be_bytes(b)
@@ -365,7 +365,7 @@ pub struct SshfpVerdict {
 /// `None`: the key has no SSHFP algorithm (OpenSSH: "Error calculating key
 /// fingerprint.").
 pub fn check_sshfp(set: &RrSet, key_type: &str, blob: &[u8]) -> Option<SshfpVerdict> {
-    use purecrypto::hash::{Digest, Sha1, Sha256};
+    use puressh::crypto::hash::{Digest, Sha1, Sha256};
     let mut v = SshfpVerdict {
         found: !set.rdatas.is_empty(),
         matched: false,
@@ -379,8 +379,8 @@ pub fn check_sshfp(set: &RrSet, key_type: &str, blob: &[u8]) -> Option<SshfpVerd
         };
         let ours = sshfp_algorithm(key_type)?;
         let want: Vec<u8> = match fptype {
-            1 => Sha1::digest(blob).as_ref().to_vec(),
-            2 => Sha256::digest(blob).as_ref().to_vec(),
+            1 => Sha1::digest(blob).to_vec(),
+            2 => Sha256::digest(blob).to_vec(),
             // A digest type OpenSSH does not know: not a key to compare.
             _ => return None,
         };
@@ -443,7 +443,7 @@ mod dns_tests {
 
     #[test]
     fn replies_and_sshfp() {
-        use purecrypto::hash::{Digest, Sha256};
+        use puressh::crypto::hash::{Digest, Sha256};
         let blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let mut good = vec![4u8, 2];
         good.extend_from_slice(Sha256::digest(blob).as_ref());

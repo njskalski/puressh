@@ -6,11 +6,11 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::boxed::{BoxedEcdhPrivateKey, BoxedEcdsaPublicKey};
-use purecrypto::ec::curves::CurveId;
-use purecrypto::hash::{Digest, Sha256, Sha384, Sha512};
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ec::CurveId;
+use crate::crypto::ec::{EcdhPrivateKey, EcdsaPublicKey};
+use crate::crypto::hash::{Digest, Sha256, Sha384, Sha512};
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::Kex;
 use super::common::{
@@ -45,7 +45,7 @@ impl Kex for EcdhSha2Nistp521 {
 /// Client state retained between `init` and `finish`.
 pub struct ClientState {
     curve: CurveId,
-    secret: BoxedEcdhPrivateKey,
+    secret: EcdhPrivateKey,
     q_c: Vec<u8>,
 }
 
@@ -58,20 +58,7 @@ pub struct ServerReplyOut {
 }
 
 fn field_len(curve: CurveId) -> Option<usize> {
-    match curve {
-        CurveId::P256 => Some(32),
-        CurveId::P384 => Some(48),
-        CurveId::P521 => Some(66),
-        CurveId::Secp256k1 => Some(32),
-        // `CurveId` is `#[non_exhaustive]` upstream. Only the curves above are
-        // ever passed here (see the `Kex` impls above), so this arm is
-        // unreachable today. We fail closed rather than `unreachable!()`: if a
-        // future refactor ever let a peer-influenced curve reach this code, a
-        // panic would be a DoS, whereas `None` turns into a clean protocol
-        // error at the call site. Returning a guessed length would be worse —
-        // it would silently mis-frame crypto.
-        _ => None,
-    }
+    Some(curve.field_len())
 }
 
 fn sec1_point_len(curve: CurveId) -> Option<usize> {
@@ -79,7 +66,7 @@ fn sec1_point_len(curve: CurveId) -> Option<usize> {
 }
 
 fn client_init<R: RngCore + CryptoRng>(curve: CurveId, rng: &mut R) -> (ClientState, KexInitOut) {
-    let secret = BoxedEcdhPrivateKey::generate(curve, rng);
+    let secret = EcdhPrivateKey::generate(curve, rng);
     let q_c = secret.public_key().to_sec1();
     let mut payload = Vec::with_capacity(1 + 4 + q_c.len());
     payload.push(SSH_MSG_KEX_ECDH_INIT);
@@ -110,10 +97,10 @@ where
     if q_c_bytes.len() != expected_len {
         return Err(Error::Format("ECDH Q_C wrong length"));
     }
-    let peer = BoxedEcdsaPublicKey::from_sec1(curve, q_c_bytes)
+    let peer = EcdsaPublicKey::from_sec1(curve, q_c_bytes)
         .map_err(|_| Error::Format("invalid ECDH Q_C"))?;
 
-    let secret = BoxedEcdhPrivateKey::generate(curve, rng);
+    let secret = EcdhPrivateKey::generate(curve, rng);
     let q_s = secret.public_key().to_sec1();
     // Raw ECDH shared X-coordinate. Wipe the locally-materialised copy when
     // the function returns; the SSH-mpint re-encoding lives on in
@@ -175,7 +162,7 @@ fn client_finish_inner<D: Digest>(
     }
     let sig = r.read_string()?;
 
-    let peer = BoxedEcdsaPublicKey::from_sec1(state.curve, q_s_bytes)
+    let peer = EcdsaPublicKey::from_sec1(state.curve, q_s_bytes)
         .map_err(|_| Error::Format("invalid ECDH Q_S"))?;
     // Wipe the locally-materialised raw ECDH shared X-coordinate on return.
     let k_raw: Zeroizing<Vec<u8>> = Zeroizing::new(

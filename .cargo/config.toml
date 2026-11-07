@@ -1,0 +1,20 @@
+# Compile the cryptographic crates from their portable, safe-Rust paths.
+#
+# The RustCrypto crates and curve25519-dalek pick CPU-specific backends at
+# run time by default (AES-NI, SHA-NI, AVX2, NEON, ...); those backends are
+# the only `unsafe` in their arithmetic. puressh prefers the audited portable
+# code and does not care about the speed difference, so every backend knob is
+# pinned to its software implementation here. Downstream crates that build
+# puressh outside this repository should carry the same flags.
+[build]
+rustflags = [
+    "--cfg", "aes_backend=\"soft\"",
+    "--cfg", "sha1_backend=\"soft\"",
+    "--cfg", "sha2_backend=\"soft\"",
+    "--cfg", "md5_backend=\"soft\"",
+    "--cfg", "chacha20_backend=\"soft\"",
+    "--cfg", "poly1305_backend=\"soft\"",
+    "--cfg", "polyval_backend=\"soft\"",
+    "--cfg", "keccak_backend=\"soft\"",
+    "--cfg", "curve25519_dalek_backend=\"fiat\"",
+]

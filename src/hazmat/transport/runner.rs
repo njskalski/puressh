@@ -15,11 +15,13 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use purecrypto::hash::{Digest, Sha256, Sha384, Sha512};
-use purecrypto::rng::{CryptoRng, RngCore};
+use crate::crypto::hash::{Digest, Sha256, Sha384, Sha512};
+use crate::crypto::rng::{CryptoRng, RngCore};
 
 use crate::cipher::{SshCipher, cipher_by_name};
 use crate::compress::{compress_by_name, decompress_by_name};
+use crate::crypto::dh::{DhGroup, group14, group16, group18};
+use crate::crypto::zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use crate::error::{Error, Result};
 use crate::hostkey::{HostKey, HostKeyVerify};
 use crate::kex::{
@@ -35,8 +37,6 @@ use crate::kex::{
     sntrup761x25519::Sntrup761X25519Sha512,
 };
 use crate::mac::{SshMac, mac_by_name};
-use purecrypto::dh::{DhGroup, group14, group16, group18};
-use purecrypto::zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::ext_info::ExtInfo;
 use super::kex::{GexSizes, Negotiated};
@@ -1524,7 +1524,7 @@ fn kdf(
         | KexBackend::MlKem768Nistp256 => derive_with::<Sha256>(k, h, sid, letter, n),
         KexBackend::EcdhP384 => derive_with::<Sha384>(k, h, sid, letter, n),
         KexBackend::Dh1Sha1 | KexBackend::Dh14Sha1 | KexBackend::GexSha1 => {
-            derive_with::<purecrypto::hash::Sha1>(k, h, sid, letter, n)
+            derive_with::<crate::crypto::hash::Sha1>(k, h, sid, letter, n)
         }
         KexBackend::EcdhP521
         | KexBackend::Dh16
@@ -1557,10 +1557,10 @@ fn host_key_and_sig(reply: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::rng::OsRng;
     use crate::hostkey::Ed25519HostKey;
     use crate::transport::kex::{KexAlgorithms, defaults};
     use crate::transport::version::LOCAL_VERSION;
-    use purecrypto::rng::OsRng;
 
     #[test]
     fn default_gex_group_honours_client_min_floor() {

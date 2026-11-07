@@ -9,14 +9,14 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use purecrypto::bignum::BoxedUint;
-use purecrypto::der::{
+use crate::crypto::bignum::BoxedUint;
+use crate::crypto::der::{
     self, encode_bit_string, encode_context, encode_integer, encode_null, encode_octet_string,
     encode_sequence, pem_encode,
 };
 
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::{PrivateKey, PublicKey};
 use crate::error::{Error, Result};

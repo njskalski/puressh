@@ -529,12 +529,12 @@ mod tests {
     use std::time::Duration;
 
     use crate::auth::{AuthAttempt, AuthDecision, Authenticator};
+    use crate::crypto::rng::{OsRng, RngCore};
     use crate::hostkey::Ed25519HostKey;
     use crate::server::{
         AuthenticatorFactory, CommandHandler, Config as ServerConfig, ExecResult, Server,
         SessionEnv,
     };
-    use purecrypto::rng::{OsRng, RngCore};
 
     /// Bridge a blocking `TcpStream` to `futures` async I/O: every `poll_*`
     /// performs the blocking syscall and returns `Ready`, so it never parks.

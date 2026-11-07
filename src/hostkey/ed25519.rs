@@ -14,14 +14,14 @@
 //! string raw 64-byte signature (R || S)
 //! ```
 //!
-//! Backed by [`purecrypto::ec::ed25519`].
+//! Backed by [`crate::crypto::ec::ed25519`].
 
 use super::HostKeyAlgorithm;
 
 #[cfg(feature = "alloc")]
-use alloc::vec::Vec;
+use crate::crypto::ec::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature};
 #[cfg(feature = "alloc")]
-use purecrypto::ec::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature};
+use alloc::vec::Vec;
 
 #[cfg(feature = "alloc")]
 use super::{HostKey, HostKeyVerify};

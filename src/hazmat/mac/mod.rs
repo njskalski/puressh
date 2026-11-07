@@ -1,4 +1,4 @@
-//! Message Authentication Codes over [`purecrypto::hash`] (HMAC family).
+//! Message Authentication Codes over [`crate::crypto::hash`] (HMAC family).
 //!
 //! SSH MACs use either Encrypt-and-MAC (legacy) or Encrypt-then-MAC (`-etm@openssh.com`).
 //! AEAD ciphers (GCM, ChaCha20-Poly1305) provide their own integrity and ignore
@@ -8,7 +8,7 @@
 //!
 //! - [`MacSpec`] — purely descriptive metadata (name, key/tag geometry, EtM flag).
 //! - [`SshMac`]  — the runtime interface used by the packet codec to compute and
-//!   verify tags. Implementations wrap [`purecrypto::hash::Hmac`] keyed for the
+//!   verify tags. Implementations wrap [`crate::crypto::hash::Hmac`] keyed for the
 //!   life of the session.
 //! - [`mac_by_name`] — factory turning a negotiated SSH name plus a session key
 //!   into a boxed [`SshMac`].
@@ -23,10 +23,10 @@ use crate::error::{Error, Result};
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 
-use purecrypto::hash::{Digest, Hmac, Md5, Sha1, Sha256, Sha512};
+use crate::crypto::hash::{Digest, Hmac, HmacDigest, HmacOutput, Md5, Sha1, Sha256, Sha512};
 #[cfg(test)]
-use purecrypto::hash::{HmacSha256, HmacSha512};
-use purecrypto::mac::{Umac64, Umac128};
+use crate::crypto::hash::{HmacSha256, HmacSha512};
+use crate::crypto::umac::{Umac64, Umac128};
 
 /// SSH-side identifier and key/tag geometry for a MAC.
 #[derive(Debug, Clone, Copy)]
@@ -106,14 +106,14 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 /// HMAC over `seq_u32_be || msg` (RFC 4253 §6.4), possibly truncated (the
 /// `-96` suites). The keyed state is computed once and cloned per packet;
 /// [`Hmac`] wipes itself on drop.
-struct HmacMac<D: Digest> {
+struct HmacMac<D: Digest + HmacDigest> {
     keyed: Hmac<D>,
     tag_len: usize,
     etm: bool,
 }
 
-impl<D: Digest> HmacMac<D> {
-    fn tag(&self, seq: u32, msg: &[u8]) -> D::Output {
+impl<D: Digest + HmacDigest> HmacMac<D> {
+    fn tag(&self, seq: u32, msg: &[u8]) -> HmacOutput<D> {
         let mut h = self.keyed.clone();
         h.update(&seq.to_be_bytes());
         h.update(msg);
@@ -121,7 +121,7 @@ impl<D: Digest> HmacMac<D> {
     }
 }
 
-impl<D: Digest> SshMac for HmacMac<D> {
+impl<D: Digest + HmacDigest> SshMac for HmacMac<D> {
     fn tag_len(&self) -> usize {
         self.tag_len
     }
@@ -134,12 +134,12 @@ impl<D: Digest> SshMac for HmacMac<D> {
         if out.len() != self.tag_len {
             return Err(Error::Crypto("hmac: tag buffer has the wrong length"));
         }
-        out.copy_from_slice(&self.tag(seq, msg).as_ref()[..self.tag_len]);
+        out.copy_from_slice(&self.tag(seq, msg)[..self.tag_len]);
         Ok(())
     }
 
     fn verify(&self, seq: u32, msg: &[u8], tag: &[u8]) -> Result<()> {
-        if tag.len() == self.tag_len && ct_eq(&self.tag(seq, msg).as_ref()[..self.tag_len], tag) {
+        if tag.len() == self.tag_len && ct_eq(&self.tag(seq, msg)[..self.tag_len], tag) {
             Ok(())
         } else {
             Err(Error::BadMac)

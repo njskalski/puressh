@@ -5,7 +5,7 @@
 //! "new" PEM format with magic `b"openssh-key-v1\0"`, optionally encrypted
 //! with `bcrypt_pbkdf` + a symmetric cipher (typically `aes256-ctr`).
 //!
-//! Passphrase-protected keys are derived via [`purecrypto::kdf::bcrypt_pbkdf`].
+//! Passphrase-protected keys are derived via [`crate::crypto::kdf::bcrypt_pbkdf`].
 //!
 //! The two top-level types are [`PublicKey`] and [`PrivateKey`], algorithm-
 //! tagged enums covering ssh-ed25519, ecdsa-sha2-nistp{256,384,521} and
@@ -17,10 +17,10 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use purecrypto::bignum::BoxedUint;
-use purecrypto::ec::{BoxedEcdsaPrivateKey, BoxedEcdsaPublicKey, CurveId, Ed25519PrivateKey};
-use purecrypto::kdf::bcrypt_pbkdf;
-use purecrypto::zeroize::{Zeroize, Zeroizing};
+use crate::crypto::bignum::BoxedUint;
+use crate::crypto::ec::{CurveId, EcdsaPrivateKey, EcdsaPublicKey, Ed25519PrivateKey};
+use crate::crypto::kdf::bcrypt_pbkdf;
+use crate::crypto::zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{Error, Result};
 use crate::format::{Reader, Writer, read_mpint, write_mpint};
@@ -932,9 +932,9 @@ where
     // PublicKey would hold an opaque byte string that only fails later
     // when used (e.g. by an authorized_keys check), and a malformed or
     // off-curve point could otherwise sneak through to the verifier
-    // construction site. BoxedEcdsaPublicKey::from_sec1 enforces the
+    // construction site. EcdsaPublicKey::from_sec1 enforces the
     // SEC1 uncompressed prefix, length, and on-curve membership.
-    BoxedEcdsaPublicKey::from_sec1(curve_id, &point)
+    EcdsaPublicKey::from_sec1(curve_id, &point)
         .map_err(|_| Error::Format("ecdsa: invalid SEC1 point"))?;
     Ok(ctor(point, String::new()))
 }
@@ -1118,7 +1118,7 @@ impl PrivateKey {
             }
             // Nothing to derive from: the secret is on the authenticator.
             PrivateKey::SkEcdsaP256 { point, .. } => {
-                BoxedEcdsaPublicKey::from_sec1(CurveId::P256, point)
+                EcdsaPublicKey::from_sec1(CurveId::P256, point)
                     .map_err(|_| Error::Format("ecdsa: invalid SEC1 point"))?;
             }
             PrivateKey::SkEd25519 { .. } => {}
@@ -1281,7 +1281,7 @@ impl PrivateKey {
 
 /// Derive the public point from an ECDSA scalar and compare it to `point`.
 fn check_ecdsa(curve: CurveId, d: &[u8], point: &[u8]) -> Result<()> {
-    let sk = BoxedEcdsaPrivateKey::from_bytes(curve, trim_leading_zeros(d))
+    let sk = EcdsaPrivateKey::from_bytes(curve, trim_leading_zeros(d))
         .map_err(|_| Error::Crypto("ecdsa: private scalar out of range"))?;
     if sk.public_key().to_sec1() != point {
         return Err(Error::Format(

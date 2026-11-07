@@ -3,17 +3,17 @@
 //! OpenSSH keeps for old peers when configured (`group1-sha1`,
 //! `group14-sha1`, `group-exchange-sha1`; RFC 4253 / 4419).
 //!
-//! Backed by [`purecrypto::dh`]: the RFC 3526 safe-prime groups (`group14`,
+//! Backed by [`crate::crypto::dh`]: the RFC 3526 safe-prime groups (`group14`,
 //! `group16`, `group18`) and `DhPrivateKey::generate` for the ephemeral
 //! exponents.
 
 use alloc::vec::Vec;
 
-use purecrypto::bignum::BoxedUint;
-use purecrypto::dh::{DhGroup, DhPrivateKey, DhPublicKey, group14, group16, group18};
-use purecrypto::hash::{Digest, Sha1, Sha256, Sha512};
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::bignum::BoxedUint;
+use crate::crypto::dh::{DhGroup, DhPrivateKey, DhPublicKey, group14, group16, group18};
+use crate::crypto::hash::{Digest, Sha1, Sha256, Sha512};
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::Kex;
 use super::common::{

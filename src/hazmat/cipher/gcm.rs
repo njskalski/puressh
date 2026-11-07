@@ -5,8 +5,7 @@
 //! big-endian integer and incremented by one after every packet. The packet
 //! length field is transmitted in cleartext but bound to the tag as AAD.
 
-use purecrypto::cipher::{Aes128, Aes256};
-use purecrypto::cipher::{Aes128Gcm, Aes256Gcm, Gcm, TagMismatch};
+use crate::crypto::cipher::{Aes128, Aes128Gcm, Aes256, Aes256Gcm, Gcm, TagMismatch};
 
 use crate::error::{Error, Result};
 
@@ -30,7 +29,9 @@ impl GcmState {
             .map_err(|_| Error::Format("aes128-gcm key len"))?;
         let (fixed, invocation) = split_iv(iv)?;
         Ok(GcmState {
-            cipher: AesGcm::Aes128(Aes128Gcm::new(Aes128::new(k))),
+            cipher: AesGcm::Aes128(
+                Aes128Gcm::new(k).map_err(|_| Error::Format("aes128-gcm key len"))?,
+            ),
             fixed,
             invocation,
         })
@@ -42,7 +43,9 @@ impl GcmState {
             .map_err(|_| Error::Format("aes256-gcm key len"))?;
         let (fixed, invocation) = split_iv(iv)?;
         Ok(GcmState {
-            cipher: AesGcm::Aes256(Aes256Gcm::new(Aes256::new(k))),
+            cipher: AesGcm::Aes256(
+                Aes256Gcm::new(k).map_err(|_| Error::Format("aes256-gcm key len"))?,
+            ),
             fixed,
             invocation,
         })
@@ -127,7 +130,7 @@ mod tests {
     }
 
     // McGrew & Viega AES-128-GCM test case 3 — verify our adapter agrees with
-    // the underlying purecrypto Gcm at the chosen nonce.
+    // the underlying AES-GCM at the chosen nonce.
     #[test]
     fn aes128_gcm_tc3() {
         let key = h("feffe9928665731c6d6a8f9467308308");

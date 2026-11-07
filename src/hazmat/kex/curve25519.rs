@@ -6,10 +6,10 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::x25519::X25519PrivateKey;
-use purecrypto::hash::Sha256;
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ec::X25519PrivateKey;
+use crate::crypto::hash::Sha256;
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::Kex;
 use super::common::{
@@ -187,8 +187,8 @@ impl Curve25519Sha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purecrypto::hash::Sha256;
-    use purecrypto::rng::HmacDrbg;
+    use crate::crypto::hash::Sha256;
+    use crate::crypto::rng::HmacDrbg;
 
     fn hex32(s: &str) -> [u8; 32] {
         let mut out = [0u8; 32];

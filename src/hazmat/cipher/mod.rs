@@ -1,4 +1,4 @@
-//! SSH cipher suite adapters over [`purecrypto::cipher`].
+//! SSH cipher suite adapters over [`crate::crypto::cipher`].
 //!
 //! Three families of suites are surfaced:
 //!
@@ -144,7 +144,7 @@ pub fn by_name(name: &str) -> Option<&'static CipherSpec> {
 ///   apply the payload keystream once the tag has been verified.
 #[non_exhaustive]
 // Two of these live per connection (one per direction), built once per key
-// exchange, so the GCM state's size (purecrypto 0.10.4's GHASH tables) is not
+// exchange, so the GCM state's size (the expanded AES key and GHASH key) is not
 // worth an allocation and a change to this public type.
 #[allow(clippy::large_enum_variant)]
 pub enum SshCipher {

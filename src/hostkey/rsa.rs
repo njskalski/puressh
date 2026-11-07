@@ -7,23 +7,23 @@
 //! All three share the same public-key blob layout under the algorithm
 //! string `"ssh-rsa"` (RFC 8332 §3); only the signature blob differs.
 //!
-//! Backed by [`purecrypto::rsa::BoxedRsaPrivateKey`] (signing via
-//! `sign_pkcs1v15::<D>`) and [`purecrypto::rsa::BoxedRsaPublicKey`]
+//! Backed by [`crate::crypto::rsa::RsaPrivateKey`] (signing via
+//! `sign_pkcs1v15::<D>`) and [`crate::crypto::rsa::RsaPublicKey`]
 //! (`verify_pkcs1v15::<D>`); the SSH public blob is built directly from
-//! `BoxedRsaPublicKey::{modulus, exponent}`.
+//! `RsaPublicKey::{modulus, exponent}`.
 
 use super::HostKeyAlgorithm;
 
 #[cfg(feature = "alloc")]
+use crate::crypto::bignum::BoxedUint;
+#[cfg(feature = "alloc")]
+use crate::crypto::hash::{Sha1, Sha256, Sha512};
+#[cfg(feature = "alloc")]
+use crate::crypto::rsa::{RsaPrivateKey, RsaPublicKey};
+#[cfg(feature = "alloc")]
 use alloc::boxed::Box;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
-#[cfg(feature = "alloc")]
-use purecrypto::bignum::BoxedUint;
-#[cfg(feature = "alloc")]
-use purecrypto::hash::{Sha1, Sha256, Sha512};
-#[cfg(feature = "alloc")]
-use purecrypto::rsa::{BoxedRsaPrivateKey, BoxedRsaPublicKey};
 
 #[cfg(feature = "alloc")]
 use super::{HostKey, HostKeyVerify};
@@ -89,7 +89,7 @@ fn mpint_to_uint(bytes: &[u8]) -> Result<BoxedUint> {
 
 /// Minimum accepted RSA modulus size, in bits.
 ///
-/// purecrypto's `BoxedRsaPublicKey` accepts anything down to ~1024 bits, but
+/// The backend's `RsaPublicKey` accepts anything down to 1024 bits, but
 /// 1024-bit RSA is considered broken for SSH authentication (NIST SP 800-131A
 /// withdrew it and OpenSSH 7.6+ rejects shorter-than-2048 by default). We
 /// refuse at parse time rather than at verify time so callers cannot hold a
@@ -117,7 +117,7 @@ pub(crate) fn check_rsa_modulus_mpint(n_raw: &[u8]) -> Result<()> {
 /// Maximum accepted RSA public exponent size, in bits.
 ///
 /// A signature verification costs one modular exponentiation whose work is
-/// linear in `bit_len(e)`. purecrypto only requires `3 <= e < n`, so an
+/// linear in `bit_len(e)`. Without a cap an
 /// unauthenticated peer could otherwise present a 16384-bit modulus with a
 /// ~16383-bit exponent and burn seconds of CPU per verify — before any
 /// authorization decision is made. Real keys use `e = 65537` (17 bits);
@@ -141,7 +141,7 @@ pub(crate) fn check_rsa_exponent_mpint(e_raw: &[u8]) -> Result<()> {
 }
 
 #[cfg(feature = "alloc")]
-fn parse_rsa_public_blob(blob: &[u8]) -> Result<(BoxedRsaPublicKey, usize)> {
+fn parse_rsa_public_blob(blob: &[u8]) -> Result<(RsaPublicKey, usize)> {
     let mut r = Reader::new(blob);
     let name = r.read_string()?;
     if name != SshRsa::NAME.as_bytes() {
@@ -164,15 +164,16 @@ fn parse_rsa_public_blob(blob: &[u8]) -> Result<(BoxedRsaPublicKey, usize)> {
         return Err(Error::Format("rsa: modulus shorter than 2048 bits"));
     }
     let k = n.bit_len().div_ceil(8);
-    let pk = BoxedRsaPublicKey::try_new(n, e)
+    let pk = RsaPublicKey::try_new(n, e)
         .map_err(|_| Error::Format("rsa: modulus out of accepted range"))?;
     Ok((pk, k))
 }
 
 #[cfg(feature = "alloc")]
-fn build_rsa_public_blob(pk: &BoxedRsaPublicKey) -> Vec<u8> {
+fn build_rsa_public_blob(pk: &RsaPublicKey) -> Vec<u8> {
     let n = pk.modulus();
     let e = pk.exponent();
+    let (n, e) = (&n, &e);
     let mut w = Writer::new();
     w.write_string(SshRsa::NAME.as_bytes());
     let nbytes = n.to_be_bytes(n.bit_len().div_ceil(8).max(1));
@@ -183,7 +184,7 @@ fn build_rsa_public_blob(pk: &BoxedRsaPublicKey) -> Vec<u8> {
 }
 
 #[cfg(feature = "alloc")]
-fn sign_rsa(hash: RsaHash, sk: &BoxedRsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>> {
+fn sign_rsa(hash: RsaHash, sk: &RsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>> {
     let raw = match hash {
         RsaHash::Sha1 => sk.sign_pkcs1v15::<Sha1>(msg),
         RsaHash::Sha256 => sk.sign_pkcs1v15::<Sha256>(msg),
@@ -200,7 +201,7 @@ fn sign_rsa(hash: RsaHash, sk: &BoxedRsaPrivateKey, msg: &[u8]) -> Result<Vec<u8
 #[cfg(feature = "alloc")]
 fn verify_rsa(
     hash: RsaHash,
-    pk: &BoxedRsaPublicKey,
+    pk: &RsaPublicKey,
     k: usize,
     msg: &[u8],
     sig_blob: &[u8],
@@ -244,8 +245,8 @@ macro_rules! rsa_host_key {
         #[cfg(feature = "alloc")]
         #[doc = $doc]
         pub struct $name {
-            private: Option<BoxedRsaPrivateKey>,
-            public: BoxedRsaPublicKey,
+            private: Option<RsaPrivateKey>,
+            public: RsaPublicKey,
             k: usize,
         }
 
@@ -254,16 +255,17 @@ macro_rules! rsa_host_key {
             /// Build a host key from its `(n, e, d)` components.
             ///
             /// Without the prime factors `(p, q)`, base-blinding is disabled
-            /// on the private path — see `BoxedRsaPrivateKey::from_components`
+            /// on the private path — see `RsaPrivateKey::from_components`
             /// — leaving signing exposed to remote timing analysis
             /// (Brumley–Boneh). Prefer [`Self::from_components_with_primes`]
             /// whenever the key file carries `p` and `q` (openssh-key-v1,
             /// PKCS#1 and PKCS#8 all do).
             pub fn from_components(n: BoxedUint, e: BoxedUint, d: BoxedUint) -> Result<Self> {
-                let public = BoxedRsaPublicKey::try_new(n.clone(), e.clone())
+                let public = RsaPublicKey::try_new(n.clone(), e.clone())
                     .map_err(|_| Error::Crypto("rsa: modulus out of accepted range"))?;
                 let k = n.bit_len().div_ceil(8);
-                let private = BoxedRsaPrivateKey::from_components(n, e, d);
+                let private = RsaPrivateKey::from_components(n, e, d)
+                    .map_err(|_| Error::Crypto("rsa: inconsistent private key"))?;
                 Ok(Self {
                     private: Some(private),
                     public,
@@ -272,13 +274,12 @@ macro_rules! rsa_host_key {
             }
 
             /// Build a host key from `(n, e, d)` **and** the prime factors
-            /// `(p, q)`, keeping purecrypto's base blinding (and CRT) enabled
-            /// on the signing path.
+            /// `(p, q)`, so the signing path can use CRT.
             ///
             /// The primes are checked against the modulus (`p * q == n`, both
-            /// odd and non-trivial) before use: purecrypto's constructor
-            /// performs no validation, and a corrupt key file with mismatched
-            /// primes would otherwise produce garbage CRT signatures.
+            /// odd and non-trivial) before use, so a corrupt key file with
+            /// mismatched primes is refused instead of producing garbage CRT
+            /// signatures.
             pub fn from_components_with_primes(
                 n: BoxedUint,
                 e: BoxedUint,
@@ -287,10 +288,11 @@ macro_rules! rsa_host_key {
                 q: BoxedUint,
             ) -> Result<Self> {
                 check_rsa_primes(&n, &p, &q)?;
-                let public = BoxedRsaPublicKey::try_new(n.clone(), e.clone())
+                let public = RsaPublicKey::try_new(n.clone(), e.clone())
                     .map_err(|_| Error::Crypto("rsa: modulus out of accepted range"))?;
                 let k = n.bit_len().div_ceil(8);
-                let private = BoxedRsaPrivateKey::from_components_with_primes(n, e, d, p, q);
+                let private = RsaPrivateKey::from_components_with_primes(n, e, d, p, q)
+                    .map_err(|_| Error::Crypto("rsa: inconsistent private key"))?;
                 Ok(Self {
                     private: Some(private),
                     public,
@@ -301,7 +303,7 @@ macro_rules! rsa_host_key {
             /// Build a verifier-only host key from `(n, e)`.
             pub fn from_public_components(n: BoxedUint, e: BoxedUint) -> Result<Self> {
                 let k = n.bit_len().div_ceil(8);
-                let public = BoxedRsaPublicKey::try_new(n, e)
+                let public = RsaPublicKey::try_new(n, e)
                     .map_err(|_| Error::Crypto("rsa: modulus out of accepted range"))?;
                 Ok(Self {
                     private: None,
@@ -321,8 +323,8 @@ macro_rules! rsa_host_key {
             #[doc(hidden)]
             #[allow(dead_code)]
             pub(crate) fn from_rsa_parts(
-                private: Option<BoxedRsaPrivateKey>,
-                public: BoxedRsaPublicKey,
+                private: Option<RsaPrivateKey>,
+                public: RsaPublicKey,
                 k: usize,
             ) -> Self {
                 Self { private, public, k }
@@ -405,8 +407,8 @@ fn preferred_rsa_sha2(server_sig_algs: &str) -> Option<&'static str> {
 /// SHA-1 opt-in ([`super::allow_rsa_sha1`]) — legacy `ssh-rsa`.
 #[cfg(feature = "alloc")]
 fn rsa_variant_for(
-    private: &Option<BoxedRsaPrivateKey>,
-    public: &BoxedRsaPublicKey,
+    private: &Option<RsaPrivateKey>,
+    public: &RsaPublicKey,
     k: usize,
     current: &str,
     sig_algs: &str,
@@ -431,10 +433,10 @@ fn rsa_variant_for(
 /// constructed from the same material.
 #[cfg(feature = "alloc")]
 fn clone_rsa_parts(
-    private: &Option<BoxedRsaPrivateKey>,
-    public: &BoxedRsaPublicKey,
+    private: &Option<RsaPrivateKey>,
+    public: &RsaPublicKey,
     k: usize,
-) -> (Option<BoxedRsaPrivateKey>, BoxedRsaPublicKey, usize) {
+) -> (Option<RsaPrivateKey>, RsaPublicKey, usize) {
     (private.clone(), public.clone(), k)
 }
 
@@ -591,8 +593,7 @@ mod tests {
     }
 
     /// Encode a public blob by hand so the exponent can be any width
-    /// (`from_public_components` would go through purecrypto, which does
-    /// not cap `e`).
+    /// (`from_public_components` applies the backend's own cap on `e`).
     fn raw_rsa_blob(e_mag: &[u8], n_mag: &[u8]) -> Vec<u8> {
         let mut w = Writer::new();
         w.write_string(SshRsa::NAME.as_bytes());
@@ -603,7 +604,7 @@ mod tests {
 
     #[test]
     fn rsa_parse_rejects_oversized_exponent() {
-        // A 2048-bit modulus with a 2047-bit exponent: legal for purecrypto
+        // A 2048-bit modulus with a 2047-bit exponent: arithmetically legal
         // (3 <= e < n) but a verify-cost DoS. Must be refused at parse time.
         let (n, _) = known_n_e();
         let n_mag = n.to_be_bytes(256);

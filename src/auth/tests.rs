@@ -1028,7 +1028,7 @@ fn ssh_rsa_credential_with_server_advertising_rsa_sha2_512_signs_with_512() {
     // upgrade hook it should be promoted to `rsa-sha2-512` (the
     // strongest variant the server advertises) and the publickey
     // probe must go out under the new name.
-    use purecrypto::bignum::BoxedUint;
+    use crate::crypto::bignum::BoxedUint;
     // Same vector the hostkey tests use — only the public components
     // are needed to exercise the credential walk; the probe is sent
     // before any sign() call.
@@ -1077,7 +1077,7 @@ fn ssh_rsa_credential_with_server_advertising_rsa_sha2_512_signs_with_512() {
 
 #[test]
 fn ssh_rsa_credential_upgrades_to_256_when_only_256_advertised() {
-    use purecrypto::bignum::BoxedUint;
+    use crate::crypto::bignum::BoxedUint;
     let mut n_bytes = vec![0u8; 256];
     n_bytes[0] = 0xc0;
     for (i, b) in n_bytes.iter_mut().enumerate().skip(1) {
@@ -1118,7 +1118,7 @@ fn ssh_rsa_credential_skipped_when_server_advertises_neither_sha2() {
     // Server lists only ssh-ed25519 — the RSA credential has no
     // upgrade target and must be dropped, falling through to the
     // password fallback rather than emitting an ssh-rsa probe.
-    use purecrypto::bignum::BoxedUint;
+    use crate::crypto::bignum::BoxedUint;
     let mut n_bytes = vec![0u8; 256];
     n_bytes[0] = 0xc0;
     for (i, b) in n_bytes.iter_mut().enumerate().skip(1) {
@@ -1533,7 +1533,7 @@ fn rsa_fixture_signers() -> (
     crate::hostkey::RsaSha2_512HostKey,
     crate::hostkey::RsaSha2_256HostKey,
 ) {
-    use purecrypto::bignum::BoxedUint;
+    use crate::crypto::bignum::BoxedUint;
     let pem = cert_fixture("u_rsa");
     let key = crate::key::PrivateKey::parse_openssh_pem(&pem, None).unwrap();
     let crate::key::PrivateKey::Rsa { n, e, d, .. } = key else {

@@ -4,9 +4,9 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::hash::{Digest, Sha256, Sha512};
-use purecrypto::kdf::{hkdf_expand, hkdf_extract};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::hash::{Digest, Sha256, Sha512};
+use crate::crypto::kdf::{hkdf_expand, hkdf_extract};
+use crate::crypto::zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::format::{Reader, Writer};
@@ -43,7 +43,7 @@ const ACCEPT_HEAD_LEN: usize = 3 + 32 + 32 + 2 + 2;
 /// `SHA-256` of an SSH wire-format public-key blob — the `key_fp` /
 /// `host_fp` of the protocol (same input as an OpenSSH `SHA256:` fingerprint).
 pub fn key_fp(blob: &[u8]) -> [u8; 32] {
-    Sha256::digest(blob)
+    Sha256::digest(blob).into()
 }
 
 /// SHA-256 of a whole KNOCK datagram — binds an ACCEPT to its KNOCK.
@@ -146,7 +146,7 @@ pub fn open_token(
     info.extend_from_slice(eph_s);
     info.extend_from_slice(&port.to_be_bytes());
     let mut out = Zeroizing::new([0u8; 32]);
-    hkdf_expand::<Sha256>(&*prk, &info, &mut out[..]);
+    hkdf_expand::<Sha256>(&prk, &info, &mut out[..]);
     out
 }
 

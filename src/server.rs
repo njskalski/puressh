@@ -32,7 +32,7 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendE
 use std::thread;
 use std::time::{Duration, Instant};
 
-use purecrypto::rng::RngCore;
+use crate::crypto::rng::RngCore;
 
 use crate::auth::{Authenticator, ServerAuth, ServerStep};
 use crate::channel::{
@@ -2384,7 +2384,7 @@ fn handle_connection_inner(
 /// its owner only (OpenSSH's `prepare_auth_info_file`); its path, or `None`
 /// when it could not be written.
 fn write_auth_info_file(info: &str) -> Option<String> {
-    use purecrypto::rng::{OsRng, RngCore};
+    use crate::crypto::rng::{OsRng, RngCore};
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
@@ -5912,10 +5912,10 @@ mod tests {
     }
     use crate::auth::{AuthAttempt, AuthDecision, Authenticator};
     use crate::client::{Client, Config as ClientConfig, HostKeyPolicy};
+    use crate::crypto::rng::OsRng;
     use crate::hostkey::Ed25519HostKey;
     use crate::transport::kex::KexAlgorithms;
     use crate::transport::{KexRunner, PacketCodec, Role};
-    use purecrypto::rng::OsRng;
     use std::sync::Mutex;
     use std::time::Duration;
 

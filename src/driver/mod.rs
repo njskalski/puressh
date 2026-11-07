@@ -143,7 +143,7 @@ mod rekey_tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use purecrypto::rng::{OsRng, RngCore};
+    use crate::crypto::rng::{OsRng, RngCore};
 
     use crate::auth::{AuthAttempt, AuthDecision, Authenticator};
     use crate::hostkey::{Ed25519HostKey, HostKey, host_key_verify_by_name};

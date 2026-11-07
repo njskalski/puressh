@@ -457,7 +457,7 @@ mod imp {
 
     /// `n` characters of [`PRESENTATION`], at random.
     fn random_chars(n: usize) -> String {
-        use purecrypto::rng::{OsRng, RngCore};
+        use puressh::crypto::rng::{OsRng, RngCore};
         let mut out = String::with_capacity(n);
         while out.len() < n {
             let mut b = [0u8; 1];
@@ -473,7 +473,7 @@ mod imp {
     /// Ten characters derived from the host name, so the sockets in a home
     /// directory shared between hosts can be told apart (OpenSSH's).
     fn hostname_hash() -> String {
-        use purecrypto::hash::{Digest, Sha512};
+        use puressh::crypto::hash::{Digest, Sha512};
         let mut buf = [0u8; 256];
         // SAFETY: the buffer is writable for its whole length.
         let r = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
@@ -720,7 +720,7 @@ mod imp {
             if n == 0 || n > MAX_REQUEST {
                 return;
             }
-            let mut req = purecrypto::zeroize::Zeroizing::new(vec![0u8; n]);
+            let mut req = puressh::crypto::zeroize::Zeroizing::new(vec![0u8; n]);
             if stream.read_exact(&mut req).is_err() {
                 return;
             }
@@ -890,7 +890,7 @@ mod imp {
         fn pin(
             &self,
             key: &puressh::key::PrivateKey,
-        ) -> Option<purecrypto::zeroize::Zeroizing<String>> {
+        ) -> Option<puressh::crypto::zeroize::Zeroizing<String>> {
             if !askpass_allowed() {
                 return None;
             }
@@ -914,7 +914,7 @@ mod imp {
                 .stderr(std::process::Stdio::inherit())
                 .output()
                 .ok()?;
-            let pin = purecrypto::zeroize::Zeroizing::new(
+            let pin = puressh::crypto::zeroize::Zeroizing::new(
                 String::from_utf8_lossy(&out.stdout)
                     .split(['\r', '\n'])
                     .next()
@@ -922,7 +922,7 @@ mod imp {
                     .to_string(),
             );
             let mut raw = out.stdout;
-            purecrypto::zeroize::Zeroize::zeroize(&mut raw);
+            puressh::crypto::zeroize::Zeroize::zeroize(&mut raw);
             (out.status.success() && !pin.is_empty()).then_some(pin)
         }
 

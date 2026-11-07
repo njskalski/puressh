@@ -14,7 +14,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use purecrypto::hash::{Digest, Sha256, Sha512};
+use crate::crypto::hash::{Digest, Sha256, Sha512};
 
 use crate::error::{Error, Result};
 use crate::format::{Reader, Writer};
@@ -55,8 +55,8 @@ impl HashAlg {
     /// Digest `message` in one go.
     pub fn digest(self, message: &[u8]) -> Vec<u8> {
         match self {
-            HashAlg::Sha256 => Sha256::digest(message).as_ref().to_vec(),
-            HashAlg::Sha512 => Sha512::digest(message).as_ref().to_vec(),
+            HashAlg::Sha256 => Sha256::digest(message).to_vec(),
+            HashAlg::Sha512 => Sha512::digest(message).to_vec(),
         }
     }
 
@@ -74,7 +74,7 @@ impl HashAlg {
                     }
                     h.update(&buf[..n]);
                 }
-                Ok(h.finalize().as_ref().to_vec())
+                Ok(h.finalize().to_vec())
             }
             HashAlg::Sha512 => {
                 let mut h = Sha512::new();
@@ -85,7 +85,7 @@ impl HashAlg {
                     }
                     h.update(&buf[..n]);
                 }
-                Ok(h.finalize().as_ref().to_vec())
+                Ok(h.finalize().to_vec())
             }
         }
     }

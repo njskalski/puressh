@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use purecrypto::hash::{Digest, Sha256};
-use purecrypto::rng::RngCore;
+use crate::crypto::hash::{Digest, Sha256};
+use crate::crypto::rng::RngCore;
 
 use crate::auth::{ClientAuth, ClientCredential, ClientStep};
 use crate::channel::{
@@ -4175,7 +4175,7 @@ pub(crate) fn build_verifier(
             // Pin the whole certificate blob by fingerprint.
             HostKeyPolicy::AcceptFingerprint(fp) => {
                 let digest = Sha256::digest(k_s);
-                if digest.as_ref() != fp {
+                if digest[..] != fp[..] {
                     return Err(Error::HostKeyRejected);
                 }
                 cert.check_type(crate::cert::CertType::Host)?;
@@ -4248,7 +4248,7 @@ pub(crate) fn build_verifier(
         HostKeyPolicy::AcceptAny => {}
         HostKeyPolicy::AcceptFingerprint(fp) => {
             let digest = Sha256::digest(k_s);
-            if digest.as_ref() != fp {
+            if digest[..] != fp[..] {
                 return Err(Error::HostKeyRejected);
             }
         }
@@ -5098,10 +5098,10 @@ fn sanitize_for_terminal(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::rng::OsRng;
     use crate::hostkey::Ed25519HostKey;
     use crate::transport::version::LOCAL_VERSION;
     use crate::transport::{PacketCodec, Role, VersionExchange};
-    use purecrypto::rng::OsRng;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;

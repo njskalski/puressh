@@ -9,7 +9,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use purecrypto::zeroize::Zeroize;
+use crate::crypto::zeroize::Zeroize;
 
 use crate::error::{Error, Result};
 use crate::format::{Reader, Writer};
@@ -115,7 +115,7 @@ impl ServiceAccept {
 /// A cleartext secret (a password or kbd-interactive answer) whose backing
 /// bytes are wiped from memory when the value is dropped.
 ///
-/// This wraps [`purecrypto::zeroize::Zeroizing<String>`] so the heap buffer is zeroized
+/// This wraps [`crate::crypto::zeroize::Zeroizing<String>`] so the heap buffer is zeroized
 /// on `Drop` rather than left in freed memory. It keeps the ergonomics of a
 /// plain `String` for construction (`"pw".into()`, `String::into()`) and
 /// comparison (`secret == "pw"`), so it can be dropped into the existing
@@ -134,7 +134,7 @@ impl ServiceAccept {
 /// `"<redacted>"` for these fields; this is belt-and-suspenders so a
 /// stray `{:?}` directly on a `SecretString` cannot leak either.
 #[derive(Clone)]
-pub struct SecretString(purecrypto::zeroize::Zeroizing<String>);
+pub struct SecretString(crate::crypto::zeroize::Zeroizing<String>);
 
 impl SecretString {
     /// Borrow the secret bytes for wire encoding.
@@ -174,13 +174,13 @@ impl Eq for SecretString {}
 
 impl From<String> for SecretString {
     fn from(s: String) -> Self {
-        SecretString(purecrypto::zeroize::Zeroizing::new(s))
+        SecretString(crate::crypto::zeroize::Zeroizing::new(s))
     }
 }
 
 impl From<&str> for SecretString {
     fn from(s: &str) -> Self {
-        SecretString(purecrypto::zeroize::Zeroizing::new(s.into()))
+        SecretString(crate::crypto::zeroize::Zeroizing::new(s.into()))
     }
 }
 

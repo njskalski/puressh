@@ -1,18 +1,16 @@
 //! `ecdsa-sha2-nistp{256,384,521}` (RFC 5656) — ECDSA host keys.
 //!
-//! Backed by [`purecrypto::ec::boxed`] (runtime-dispatched ECDSA over the
+//! Backed by [`crate::crypto::ec::boxed`] (runtime-dispatched ECDSA over the
 //! three NIST primes).
 
 use super::HostKeyAlgorithm;
 
 #[cfg(feature = "alloc")]
+use crate::crypto::ec::{CurveId, EcdsaPrivateKey, EcdsaPublicKey, EcdsaSignature};
+#[cfg(feature = "alloc")]
+use crate::crypto::hash::{Sha256, Sha384, Sha512};
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
-#[cfg(feature = "alloc")]
-use purecrypto::bignum::BoxedUint;
-#[cfg(feature = "alloc")]
-use purecrypto::ec::{BoxedEcdsaPrivateKey, BoxedEcdsaPublicKey, BoxedEcdsaSignature, CurveId};
-#[cfg(feature = "alloc")]
-use purecrypto::hash::{Sha256, Sha384, Sha512};
 
 #[cfg(feature = "alloc")]
 use super::{HostKey, HostKeyVerify};
@@ -89,7 +87,7 @@ fn build_public_blob(params: &EcdsaParams, sec1: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(feature = "alloc")]
-fn parse_public_blob(params: &EcdsaParams, blob: &[u8]) -> Result<BoxedEcdsaPublicKey> {
+fn parse_public_blob(params: &EcdsaParams, blob: &[u8]) -> Result<EcdsaPublicKey> {
     let mut r = Reader::new(blob);
     let name = r.read_string()?;
     if name != params.algorithm.as_bytes() {
@@ -103,12 +101,12 @@ fn parse_public_blob(params: &EcdsaParams, blob: &[u8]) -> Result<BoxedEcdsaPubl
     if !r.is_empty() {
         return Err(Error::Format("ecdsa: public key trailing data"));
     }
-    BoxedEcdsaPublicKey::from_sec1(params.curve, sec1)
+    EcdsaPublicKey::from_sec1(params.curve, sec1)
         .map_err(|_| Error::Format("ecdsa: invalid SEC1 point"))
 }
 
 #[cfg(feature = "alloc")]
-fn sign_with(params: &EcdsaParams, priv_key: &BoxedEcdsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>> {
+fn sign_with(params: &EcdsaParams, priv_key: &EcdsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>> {
     let sig = match params.hash {
         EcdsaHash::Sha256 => priv_key.sign::<Sha256>(msg),
         EcdsaHash::Sha384 => priv_key.sign::<Sha384>(msg),
@@ -119,9 +117,9 @@ fn sign_with(params: &EcdsaParams, priv_key: &BoxedEcdsaPrivateKey, msg: &[u8]) 
 }
 
 #[cfg(feature = "alloc")]
-fn encode_signature(params: &EcdsaParams, sig: &BoxedEcdsaSignature) -> Vec<u8> {
-    let r_bytes = sig.r_bytes(params.curve);
-    let s_bytes = sig.s_bytes(params.curve);
+fn encode_signature(params: &EcdsaParams, sig: &EcdsaSignature) -> Vec<u8> {
+    let r_bytes = sig.r_bytes();
+    let s_bytes = sig.s_bytes();
 
     let mut inner = Writer::new();
     write_mpint(&mut inner, &r_bytes);
@@ -137,7 +135,7 @@ fn encode_signature(params: &EcdsaParams, sig: &BoxedEcdsaSignature) -> Vec<u8> 
 #[cfg(feature = "alloc")]
 fn verify_with(
     params: &EcdsaParams,
-    pub_key: &BoxedEcdsaPublicKey,
+    pub_key: &EcdsaPublicKey,
     msg: &[u8],
     sig_blob: &[u8],
 ) -> Result<()> {
@@ -157,9 +155,12 @@ fn verify_with(
         return Err(Error::Format("ecdsa: signature blob trailing data"));
     }
 
-    let r_uint = mpint_to_uint(r_raw)?;
-    let s_uint = mpint_to_uint(s_raw)?;
-    let sig = BoxedEcdsaSignature::from_components(r_uint, s_uint);
+    let sig = EcdsaSignature::from_components(
+        params.curve,
+        mpint_magnitude(r_raw)?,
+        mpint_magnitude(s_raw)?,
+    )
+    .map_err(|_| Error::BadSignature)?;
 
     match params.hash {
         EcdsaHash::Sha256 => pub_key.verify::<Sha256>(msg, &sig),
@@ -172,35 +173,36 @@ fn verify_with(
 /// A P-256 public key from its SEC1 point (for the security-key types,
 /// whose blobs carry one after their own fields).
 #[cfg(feature = "alloc")]
-pub(super) fn p256_from_sec1(sec1: &[u8]) -> Result<BoxedEcdsaPublicKey> {
-    BoxedEcdsaPublicKey::from_sec1(CurveId::P256, sec1)
+pub(super) fn p256_from_sec1(sec1: &[u8]) -> Result<EcdsaPublicKey> {
+    EcdsaPublicKey::from_sec1(CurveId::P256, sec1)
         .map_err(|_| Error::Format("ecdsa: invalid SEC1 point"))
 }
 
 /// Verify an ECDSA-P256/SHA-256 signature over `msg` given as the inner
 /// signature blob (`mpint r, mpint s`).
 #[cfg(feature = "alloc")]
-pub(super) fn verify_p256_inner(
-    pub_key: &BoxedEcdsaPublicKey,
-    msg: &[u8],
-    inner: &[u8],
-) -> Result<()> {
+pub(super) fn verify_p256_inner(pub_key: &EcdsaPublicKey, msg: &[u8], inner: &[u8]) -> Result<()> {
     let mut ir = Reader::new(inner);
     let r_raw = read_mpint(&mut ir)?;
     let s_raw = read_mpint(&mut ir)?;
     if !ir.is_empty() {
         return Err(Error::Format("ecdsa: signature blob trailing data"));
     }
-    let sig = BoxedEcdsaSignature::from_components(mpint_to_uint(r_raw)?, mpint_to_uint(s_raw)?);
+    let sig = EcdsaSignature::from_components(
+        CurveId::P256,
+        mpint_magnitude(r_raw)?,
+        mpint_magnitude(s_raw)?,
+    )
+    .map_err(|_| Error::BadSignature)?;
     pub_key
         .verify::<Sha256>(msg, &sig)
         .map_err(|_| Error::BadSignature)
 }
 
 #[cfg(feature = "alloc")]
-fn mpint_to_uint(bytes: &[u8]) -> Result<BoxedUint> {
+fn mpint_magnitude(bytes: &[u8]) -> Result<&[u8]> {
     if bytes.is_empty() {
-        return Ok(BoxedUint::from_u64(0));
+        return Ok(bytes);
     }
     if (bytes[0] & 0x80) != 0 {
         return Err(Error::Format("ecdsa: negative mpint in signature"));
@@ -209,7 +211,7 @@ fn mpint_to_uint(bytes: &[u8]) -> Result<BoxedUint> {
     while start + 1 < bytes.len() && bytes[start] == 0 {
         start += 1;
     }
-    Ok(BoxedUint::from_be_bytes(&bytes[start..]))
+    Ok(&bytes[start..])
 }
 
 macro_rules! ecdsa_host_key {
@@ -217,15 +219,15 @@ macro_rules! ecdsa_host_key {
         #[cfg(feature = "alloc")]
         #[doc = concat!("Host key for `", stringify!($params), "`.")]
         pub struct $name {
-            private: Option<BoxedEcdsaPrivateKey>,
-            public: BoxedEcdsaPublicKey,
+            private: Option<EcdsaPrivateKey>,
+            public: EcdsaPublicKey,
         }
 
         #[cfg(feature = "alloc")]
         impl $name {
             /// Build a host key from a raw scalar.
             pub fn from_scalar(scalar: &[u8]) -> Result<Self> {
-                let private = BoxedEcdsaPrivateKey::from_bytes($params.curve, scalar)
+                let private = EcdsaPrivateKey::from_bytes($params.curve, scalar)
                     .map_err(|_| Error::Crypto("ecdsa: invalid private scalar"))?;
                 let public = private.public_key();
                 Ok(Self {
@@ -236,7 +238,7 @@ macro_rules! ecdsa_host_key {
 
             /// Build a verifier-only host key from an uncompressed SEC1 point.
             pub fn from_sec1(point: &[u8]) -> Result<Self> {
-                let public = BoxedEcdsaPublicKey::from_sec1($params.curve, point)
+                let public = EcdsaPublicKey::from_sec1($params.curve, point)
                     .map_err(|_| Error::Format("ecdsa: invalid SEC1 point"))?;
                 Ok(Self {
                     private: None,
@@ -303,7 +305,6 @@ mod tests {
             CurveId::P256 => 32,
             CurveId::P384 => 48,
             CurveId::P521 => 66,
-            _ => unreachable!(),
         };
         let mut v = alloc::vec![0u8; len];
         v[len - 1] = 0x42;

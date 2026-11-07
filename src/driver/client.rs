@@ -24,7 +24,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use std::time::{Duration, Instant};
 
-use purecrypto::rng::{CryptoRng, OsRng, RngCore};
+use crate::crypto::rng::{CryptoRng, OsRng, RngCore};
 
 use crate::client::AlgoOverrides;
 use crate::error::{Error, Result};

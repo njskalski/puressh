@@ -21,10 +21,10 @@
 use alloc::vec::Vec;
 use std::time::{Duration, Instant};
 
-use purecrypto::ct::ConstantTimeEq;
-use purecrypto::hash::{Digest, Sha512};
-use purecrypto::rng::{OsRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ct::ConstantTimeEq;
+use crate::crypto::hash::{Digest, Sha512};
+use crate::crypto::rng::{OsRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::protocol::*;
 use crate::format::{Reader, Writer};
@@ -162,7 +162,7 @@ fn lock_digest(salt: &[u8], pass: &[u8]) -> Zeroizing<[u8; 64]> {
     let mut input = Zeroizing::new(Vec::with_capacity(salt.len() + pass.len()));
     input.extend_from_slice(salt);
     input.extend_from_slice(pass);
-    Zeroizing::new(Sha512::digest(&input[..]))
+    Zeroizing::new(Sha512::digest(&input[..]).into())
 }
 
 /// Pause after each failed unlock: this much per failure so far, up to

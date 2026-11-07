@@ -1,8 +1,8 @@
 use super::*;
+use crate::crypto::ec::{CurveId, EcdsaPrivateKey, Ed25519PrivateKey};
+use crate::crypto::hash::{Digest, Sha256};
+use crate::crypto::rng::{OsRng, RngCore};
 use crate::hostkey::HostKey;
-use purecrypto::ec::{BoxedEcdsaPrivateKey, CurveId, Ed25519PrivateKey};
-use purecrypto::hash::{Digest, Sha256};
-use purecrypto::rng::{OsRng, RngCore};
 use std::sync::Mutex;
 
 /// A software authenticator, as OpenSSH's `sk-dummy`: the key handle is the
@@ -31,7 +31,7 @@ impl Provider for SoftAuthenticator {
             Algorithm::EcdsaP256 => loop {
                 let mut d = alloc::vec![0u8; 32];
                 OsRng.fill_bytes(&mut d);
-                if let Ok(sk) = BoxedEcdsaPrivateKey::from_bytes(CurveId::P256, &d) {
+                if let Ok(sk) = EcdsaPrivateKey::from_bytes(CurveId::P256, &d) {
                     break (sk.public_key().to_sec1(), d);
                 }
             },
@@ -91,9 +91,9 @@ impl Provider for SoftAuthenticator {
         m.extend_from_slice(Sha256::digest(data).as_ref());
         let (sig_r, sig_s) = match alg {
             Algorithm::EcdsaP256 => {
-                let sk = BoxedEcdsaPrivateKey::from_bytes(CurveId::P256, key_handle).unwrap();
+                let sk = EcdsaPrivateKey::from_bytes(CurveId::P256, key_handle).unwrap();
                 let sig = sk.sign::<Sha256>(&m).unwrap();
-                (sig.r_bytes(CurveId::P256), sig.s_bytes(CurveId::P256))
+                (sig.r_bytes(), sig.s_bytes())
             }
             Algorithm::Ed25519 => {
                 let seed: [u8; 32] = key_handle.try_into().unwrap();

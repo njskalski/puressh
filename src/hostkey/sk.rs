@@ -16,8 +16,8 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::{BoxedEcdsaPublicKey, Ed25519PublicKey, Ed25519Signature};
-use purecrypto::hash::{Digest, Sha256};
+use crate::crypto::ec::{EcdsaPublicKey, Ed25519PublicKey, Ed25519Signature};
+use crate::crypto::hash::{Digest, Sha256};
 
 use super::HostKeyVerify;
 use crate::error::{Error, Result};
@@ -99,7 +99,7 @@ fn read_application<'a>(r: &mut Reader<'a>) -> Result<&'a [u8]> {
 
 /// An `sk-ecdsa-sha2-nistp256@openssh.com` public key.
 pub struct SkEcdsaP256Key {
-    public: BoxedEcdsaPublicKey,
+    public: EcdsaPublicKey,
     application: Vec<u8>,
 }
 
@@ -135,7 +135,7 @@ impl HostKeyVerify for SkEcdsaP256Key {
             let exts = r.read_string()?;
             (webauthn_hash(msg, origin, client_data, flags, exts)?, exts)
         } else {
-            (Sha256::digest(msg).as_ref().to_vec(), &[][..])
+            (Sha256::digest(msg).to_vec(), &[][..])
         };
         if !r.is_empty() {
             return Err(Error::Format("sk-ecdsa: signature trailing data"));
@@ -187,7 +187,7 @@ fn webauthn_hash(
     if !client_data.starts_with(&want) {
         return Err(Error::BadSignature);
     }
-    Ok(Sha256::digest(client_data).as_ref().to_vec())
+    Ok(Sha256::digest(client_data).to_vec())
 }
 
 /// Unpadded base64url (RFC 4648 §5), as WebAuthn encodes the challenge.

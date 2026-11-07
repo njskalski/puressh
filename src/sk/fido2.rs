@@ -9,10 +9,10 @@ use alloc::vec::Vec;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::time::{Duration, Instant};
 
+use crate::crypto::ec::{CurveId, EcdsaPublicKey};
+use crate::crypto::hash::{Digest, Sha256};
+use crate::crypto::zeroize::Zeroizing;
 use dlsym::Bindings;
-use purecrypto::ec::{BoxedEcdsaPublicKey, CurveId};
-use purecrypto::hash::{Digest, Sha256};
-use purecrypto::zeroize::Zeroizing;
 
 use super::{
     Algorithm, CPin, EnrollResponse, FORCE_OPERATION, Provider, RESIDENT_KEY, ResidentKey,
@@ -380,7 +380,7 @@ fn pack_public_key(alg: Algorithm, pubkey: Option<&[u8]>) -> Option<Vec<u8>> {
             let mut sec1 = Vec::with_capacity(65);
             sec1.push(0x04);
             sec1.extend_from_slice(pubkey);
-            let point = BoxedEcdsaPublicKey::from_sec1(CurveId::P256, &sec1).ok()?;
+            let point = EcdsaPublicKey::from_sec1(CurveId::P256, &sec1).ok()?;
             Some(point.to_sec1())
         }
         Algorithm::Ed25519 => (pubkey.len() == 32).then(|| pubkey.to_vec()),
@@ -1213,9 +1213,9 @@ mod tests {
 
     #[test]
     fn public_key_packing() {
-        use purecrypto::ec::BoxedEcdsaPrivateKey;
+        use crate::crypto::ec::EcdsaPrivateKey;
 
-        let sk = BoxedEcdsaPrivateKey::from_bytes(CurveId::P256, &[7u8; 32]).unwrap();
+        let sk = EcdsaPrivateKey::from_bytes(CurveId::P256, &[7u8; 32]).unwrap();
         let sec1 = sk.public_key().to_sec1();
         assert_eq!(sec1.len(), 65);
         let xy = &sec1[1..];

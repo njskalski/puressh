@@ -34,7 +34,7 @@ pub enum Error {
     /// I/O error (only with `std`).
     #[cfg(feature = "std")]
     Io(std::io::Error),
-    /// Error originating from the `purecrypto` backend.
+    /// Error originating from the cryptographic backend.
     Crypto(&'static str),
     /// A configuration value supplied to the library was internally
     /// inconsistent or insufficient (e.g. a `HostKeyPolicy::KnownHosts`

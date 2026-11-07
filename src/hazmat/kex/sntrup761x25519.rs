@@ -13,10 +13,10 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::x25519::X25519PrivateKey;
-use purecrypto::hash::{Digest, Sha512};
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ec::X25519PrivateKey;
+use crate::crypto::hash::{Digest, Sha512};
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::Kex;
 use super::common::{

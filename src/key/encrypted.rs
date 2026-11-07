@@ -11,11 +11,11 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use purecrypto::cipher::{Aes128, Aes192, Aes256, Cbc, Cbc64, Des, TdesEde3};
-use purecrypto::der::{self, Reader as DerReader};
-use purecrypto::hash::{Digest, Md5, Sha1, Sha256};
-use purecrypto::rng::{CryptoRng, RngCore};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::cipher::{Aes128, Aes192, Aes256, Cbc, Des, TdesEde3};
+use crate::crypto::der::{self, Reader as DerReader};
+use crate::crypto::hash::{Digest, Md5, Sha1, Sha256};
+use crate::crypto::rng::{CryptoRng, RngCore};
+use crate::crypto::zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 
@@ -44,9 +44,11 @@ fn cbc_decrypt(cipher: &str, key: &[u8], iv: &[u8], data: &[u8]) -> Result<Zeroi
     let bad = || Error::Format("encrypted key: bad length");
     macro_rules! aes {
         ($t:ty, $n:expr) => {{
-            let k: &[u8; $n] = key.try_into().map_err(|_| bad())?;
-            let iv: &[u8; 16] = iv.try_into().map_err(|_| bad())?;
-            Cbc::new(<$t>::new(k), iv)
+            if key.len() != $n {
+                return Err(bad());
+            }
+            Cbc::<$t>::new(key, iv)
+                .map_err(|_| bad())?
                 .decrypt(&mut buf)
                 .map_err(|_| bad())?;
             return unpad(buf, 16);
@@ -57,16 +59,14 @@ fn cbc_decrypt(cipher: &str, key: &[u8], iv: &[u8], data: &[u8]) -> Result<Zeroi
         "AES-192-CBC" => aes!(Aes192, 24),
         "AES-256-CBC" => aes!(Aes256, 32),
         "DES-EDE3-CBC" => {
-            let k: &[u8; 24] = key.try_into().map_err(|_| bad())?;
-            let iv: &[u8; 8] = iv.try_into().map_err(|_| bad())?;
-            Cbc64::new(TdesEde3::new(k), iv)
+            Cbc::<TdesEde3>::new(key, iv)
+                .map_err(|_| bad())?
                 .decrypt(&mut buf)
                 .map_err(|_| bad())?;
         }
         "DES-CBC" => {
-            let k: &[u8; 8] = key.try_into().map_err(|_| bad())?;
-            let iv: &[u8; 8] = iv.try_into().map_err(|_| bad())?;
-            Cbc64::new(Des::new(k), iv)
+            Cbc::<Des>::new(key, iv)
+                .map_err(|_| bad())?
                 .decrypt(&mut buf)
                 .map_err(|_| bad())?;
         }
@@ -94,7 +94,7 @@ fn bytes_to_key(pass: &[u8], salt: &[u8], len: usize) -> Zeroizing<Vec<u8>> {
         h.update(&prev);
         h.update(pass);
         h.update(salt);
-        prev = Zeroizing::new(h.finalize().as_ref().to_vec());
+        prev = Zeroizing::new(h.finalize().to_vec());
         out.extend_from_slice(&prev);
     }
     out.truncate(len);
@@ -245,9 +245,9 @@ pub(crate) fn decrypt_pkcs8(
     let mut key = Zeroizing::new(alloc::vec![0u8; len]);
     let iterations = iterations as u32;
     if sha256 {
-        purecrypto::kdf::pbkdf2::<Sha256>(pass, &salt, iterations, &mut key);
+        crate::crypto::kdf::pbkdf2::<Sha256>(pass, &salt, iterations, &mut key);
     } else {
-        purecrypto::kdf::pbkdf2::<Sha1>(pass, &salt, iterations, &mut key);
+        crate::crypto::kdf::pbkdf2::<Sha1>(pass, &salt, iterations, &mut key);
     }
     cbc_decrypt(cipher, &key, &iv, data)
 }
@@ -258,8 +258,8 @@ fn aes128_cbc_encrypt(key: &[u8], iv: &[u8; 16], data: &[u8]) -> Vec<u8> {
     let mut buf = Zeroizing::new(Vec::with_capacity(data.len() + pad));
     buf.extend_from_slice(data);
     buf.resize(data.len() + pad, pad as u8);
-    let k: &[u8; 16] = key.try_into().expect("AES-128 key");
-    Cbc::new(Aes128::new(k), iv)
+    Cbc::<Aes128>::new(key, iv)
+        .expect("AES-128 key and IV")
         .encrypt(&mut buf)
         .expect("padded to the block size");
     buf.to_vec()
@@ -296,7 +296,7 @@ pub(crate) fn encrypt_pkcs8<R: CryptoRng + RngCore>(
     rng.fill_bytes(&mut salt);
     rng.fill_bytes(&mut iv);
     let mut key = Zeroizing::new([0u8; 16]);
-    purecrypto::kdf::pbkdf2::<Sha256>(passphrase, &salt, ITERATIONS, &mut key[..]);
+    crate::crypto::kdf::pbkdf2::<Sha256>(passphrase, &salt, ITERATIONS, &mut key[..]);
     let data = aes128_cbc_encrypt(&key[..], &iv, der_bytes);
     let seq = |parts: &[&[u8]]| der::encode_sequence(&parts.concat());
     let kdf = seq(&[

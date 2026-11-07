@@ -17,10 +17,10 @@
 
 use alloc::vec::Vec;
 
-use purecrypto::ec::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature};
-use purecrypto::hash::{Digest, Sha512};
-use purecrypto::mldsa::{MlDsa44PrivateKey, MlDsa44PublicKey};
-use purecrypto::zeroize::Zeroizing;
+use crate::crypto::ec::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature};
+use crate::crypto::hash::{Digest, Sha512};
+use crate::crypto::mldsa::{MlDsa44PrivateKey, MlDsa44PublicKey};
+use crate::crypto::zeroize::Zeroizing;
 
 use super::{HostKey, HostKeyAlgorithm, HostKeyVerify};
 use crate::error::{Error, Result};
@@ -117,7 +117,7 @@ impl MlDsa44Ed25519HostKey {
         ed_seed.copy_from_slice(&seeds[32..]);
         let (mldsa_sk, _) = MlDsa44PrivateKey::from_seed(&mldsa_seed);
         #[cfg(feature = "std")]
-        let mldsa_sig = mldsa_sk.sign(&mut purecrypto::rng::OsRng, &m, LABEL);
+        let mldsa_sig = mldsa_sk.sign(&mut crate::crypto::rng::OsRng, &m, LABEL);
         #[cfg(not(feature = "std"))]
         let mldsa_sig = mldsa_sk.sign_deterministic(&m, LABEL);
         let mldsa_sig = mldsa_sig.map_err(|_| Error::Crypto("mldsa44-ed25519: sign"))?;

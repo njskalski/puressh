@@ -42,7 +42,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 #[cfg(feature = "server")]
-use purecrypto::rng::{OsRng, RngCore};
+use crate::crypto::rng::{OsRng, RngCore};
 
 // The server-side handler types live behind `feature = "server"`; the
 // splice-to-local-agent callback below only needs the shared `ChannelStream`

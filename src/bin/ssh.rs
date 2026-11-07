@@ -721,7 +721,7 @@ fn agent_identity_for(path: &str, have: &[ClientCredential]) -> Option<ClientCre
     let blob_of = |p: &str| {
         let text = std::fs::read_to_string(p).ok()?;
         let b64 = text.split_whitespace().nth(1)?;
-        purecrypto::der::base64_decode(b64).ok()
+        puressh::crypto::der::base64_decode(b64).ok()
     };
     let blob = blob_of(path).or_else(|| blob_of(&format!("{path}.pub")))?;
     let offered = have.iter().any(|c| match c {
@@ -5142,13 +5142,12 @@ impl Tokens {
     /// `%C`: SHA-1 of `%l%h%p%r%j`, in hex (as `puressh::mux` computes it,
     /// which Windows builds lack).
     fn connection_hash(&self) -> String {
-        use purecrypto::hash::{Digest, Sha1};
+        use puressh::crypto::hash::{Digest, Sha1};
         let material = format!(
             "{}{}{}{}{}",
             self.local_host, self.host, self.port, self.remote_user, self.jump
         );
         Sha1::digest(material.as_bytes())
-            .as_ref()
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect()
@@ -5362,7 +5361,7 @@ fn known_hosts_command(
     key_type: &str,
     blob: &[u8],
 ) -> Option<Vec<u8>> {
-    let key = purecrypto::der::base64_encode(blob);
+    let key = puressh::crypto::der::base64_encode(blob);
     let fp = common::fingerprint_b64_sha256(blob);
     let extra = [
         ('H', looked_up),
@@ -7841,7 +7840,7 @@ fn proxy_fdpass_connect(cmd: &str) -> Result<TcpStream, String> {
 /// at all is refused.
 #[cfg(unix)]
 fn random_bytes(n: usize) -> Result<Vec<u8>, String> {
-    use purecrypto::rng::{OsRng, RngCore};
+    use puressh::crypto::rng::{OsRng, RngCore};
     let mut bytes = vec![0u8; n];
     OsRng.fill_bytes(&mut bytes);
     if bytes.iter().all(|&b| b == 0) {

@@ -266,11 +266,11 @@ mod tests {
     use crate::auth::{AuthAttempt, AuthDecision, Authenticator};
     use crate::channel::{ChannelEvent, ChannelOpen, ChannelRequest};
     use crate::client::{Client, Config as ClientConfig};
+    use crate::crypto::rng::{OsRng, RngCore};
     use crate::hostkey::{Ed25519HostKey, HostKey};
     use crate::server::{
         AuthenticatorFactory, CommandHandler, Config as ServerConfig, ExecResult, SessionEnv,
     };
-    use purecrypto::rng::{OsRng, RngCore};
 
     struct BlockingAsync(TcpStream);
     impl AsyncRead for BlockingAsync {

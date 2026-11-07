@@ -45,12 +45,12 @@ fn curves_and_points() {
 
 #[test]
 fn x509_subject_and_key() {
-    let der = purecrypto::der::pem_decode(CERT_PEM, "CERTIFICATE").unwrap();
+    let der = crate::crypto::der::pem_decode(CERT_PEM, "CERTIFICATE").unwrap();
     let spki = x509::subject_public_key_info(&der).unwrap();
     let key = PublicKey::from_spki_der(spki).unwrap();
     assert_eq!(key.algorithm(), "ecdsa-sha2-nistp384");
     // The certificate's subject, as `CKA_SUBJECT` holds it.
-    let mut r = purecrypto::der::Reader::new(&der);
+    let mut r = crate::crypto::der::Reader::new(&der);
     let mut tbs = r.read_sequence().unwrap().read_sequence().unwrap();
     tbs.read_any().unwrap(); // version
     for _ in 0..4 {

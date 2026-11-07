@@ -23,7 +23,7 @@ use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use purecrypto::rng::{CryptoRng, RngCore};
+use crate::crypto::rng::{CryptoRng, RngCore};
 
 use crate::cipher::SshCipher;
 #[cfg(feature = "alloc")]
@@ -798,8 +798,8 @@ fn decode_chachapoly(
 mod tests {
     use super::*;
     use crate::cipher::cipher_by_name;
+    use crate::crypto::rng::OsRng;
     use crate::mac::mac_by_name;
-    use purecrypto::rng::OsRng;
 
     fn round_trip(enc: &mut PacketCodec, dec: &mut PacketCodec, payload: &[u8]) {
         let mut rng = OsRng;
