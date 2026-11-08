@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- *(mac)* `umac-64@openssh.com`, `umac-128@openssh.com` and their `-etm`
+  forms. UMAC has no third-party Rust implementation, and the goal of the
+  backend switch is a crypto tree made only of widely used crates. OpenSSH
+  prefers `umac-64-etm` by default, so negotiation now lands on
+  `hmac-sha2-256-etm@openssh.com`, which is in every OpenSSH default list;
+  peers restricted to UMAC-only `MACs` can no longer connect.
+
 ### Changed
 
 - *(crypto)* every cryptographic primitive now comes from the RustCrypto crates
@@ -14,11 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `des`, `p256`/`p384`/`p521`/`ecdsa`, `rsa`, `crypto-bigint`, `ml-kem`,
   `ml-dsa`, `pbkdf2`/`bcrypt-pbkdf`/`hkdf`, `zeroize`, `subtle`, `base64ct`)
   and `x25519-dalek` / `ed25519-dalek`, behind the new `puressh::crypto`
-  facade; the `purecrypto` dependency is gone. UMAC, which has no RustCrypto
-  implementation, is carried over from `purecrypto` (MIT) on top of `aes`.
-  `.cargo/config.toml` pins every crate to its portable software backend so
-  no CPU-intrinsic (`unsafe`) code paths are compiled. The OS RNG reads
-  `/dev/urandom` through `std` instead of calling `getrandom(2)`.
+  facade; the `purecrypto` dependency is gone. `.cargo/config.toml` pins
+  every crate to its portable software backend so no CPU-intrinsic (`unsafe`)
+  code paths are compiled. The OS RNG reads `/dev/urandom` through `std`
+  instead of calling `getrandom(2)`.
 - *(crypto)* Ed25519 verification is strict (canonical encodings, no
   small-order public keys); RSA public exponents are additionally capped at
   2^33 by the backend; ECDSA keys and signatures are parsed by the curve

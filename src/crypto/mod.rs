@@ -26,5 +26,4 @@ pub mod mldsa;
 pub mod mlkem;
 pub mod rng;
 pub mod rsa;
-pub mod umac;
 pub mod zeroize;

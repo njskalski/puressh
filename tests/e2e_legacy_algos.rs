@@ -1,6 +1,6 @@
 //! Interop of OpenSSH's non-default algorithms, both ways, through the real
 //! binaries: our `ssh` against OpenSSH's `sshd`, and OpenSSH's `ssh` against
-//! our `sshd`. CBC ciphers, every MAC (UMAC, HMAC-SHA1/MD5 and the `-96`
+//! our `sshd`. CBC ciphers, every MAC (HMAC-SHA1/MD5 and the `-96`
 //! forms, EtM or not), the SHA-1 and group-exchange key exchanges, `ssh-rsa`
 //! (SHA-1) user signatures, and the "Unable to negotiate" / "Permission
 //! denied" wording admins and tools look for.
@@ -233,21 +233,13 @@ fn legacy_algorithms_interoperate_with_openssh() {
         if !ciphers.iter().any(|x| x == c) {
             continue;
         }
-        for m in [
-            "hmac-sha1",
-            "hmac-sha2-256-etm@openssh.com",
-            "umac-64@openssh.com",
-        ] {
+        for m in ["hmac-sha1", "hmac-sha2-256-etm@openssh.com"] {
             let opts = o(&[&format!("Ciphers={c}"), &format!("MACs={m}")]);
             s.both_ways(&format!("{c} + {m}"), "user", &opts, &mut failures);
         }
     }
     for m in [
-        "umac-64-etm@openssh.com",
-        "umac-128-etm@openssh.com",
         "hmac-sha1-etm@openssh.com",
-        "umac-64@openssh.com",
-        "umac-128@openssh.com",
         "hmac-sha1",
         "hmac-sha1-96",
         "hmac-md5",

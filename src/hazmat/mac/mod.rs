@@ -26,7 +26,6 @@ use alloc::boxed::Box;
 use crate::crypto::hash::{Digest, Hmac, HmacDigest, HmacOutput, Md5, Sha1, Sha256, Sha512};
 #[cfg(test)]
 use crate::crypto::hash::{HmacSha256, HmacSha512};
-use crate::crypto::umac::{Umac64, Umac128};
 
 /// SSH-side identifier and key/tag geometry for a MAC.
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +33,7 @@ use crate::crypto::umac::{Umac64, Umac128};
 pub struct MacSpec {
     /// On-the-wire SSH name.
     pub name: &'static str,
-    /// MAC key length in bytes (the HMAC hash's output size; 16 for UMAC).
+    /// MAC key length in bytes (the HMAC hash's output size).
     pub key_len: usize,
     /// Tag length appended to each packet, in bytes.
     pub tag_len: usize,
@@ -54,13 +53,9 @@ const fn spec(name: &'static str, key_len: usize, tag_len: usize, etm: bool) -> 
 /// Catalogue of MACs this build supports: OpenSSH's (its defaults first, in
 /// its order, then the ones it only uses when configured).
 pub const ALL: &[MacSpec] = &[
-    spec("umac-64-etm@openssh.com", 16, 8, true),
-    spec("umac-128-etm@openssh.com", 16, 16, true),
     spec("hmac-sha2-256-etm@openssh.com", 32, 32, true),
     spec("hmac-sha2-512-etm@openssh.com", 64, 64, true),
     spec("hmac-sha1-etm@openssh.com", 20, 20, true),
-    spec("umac-64@openssh.com", 16, 8, false),
-    spec("umac-128@openssh.com", 16, 16, false),
     spec("hmac-sha2-256", 32, 32, false),
     spec("hmac-sha2-512", 64, 64, false),
     spec("hmac-sha1", 20, 20, false),
@@ -147,68 +142,6 @@ impl<D: Digest + HmacDigest> SshMac for HmacMac<D> {
     }
 }
 
-/// `umac-64@openssh.com` / `umac-128@openssh.com` (and their EtM forms):
-/// UMAC (RFC 4418) over the packet, with the sequence number as the 8-byte
-/// big-endian nonce, as OpenSSH's `mac_compute` does.
-#[derive(Clone)]
-enum Umac {
-    U64(Box<Umac64>),
-    U128(Box<Umac128>),
-}
-
-struct UmacMac {
-    keyed: Umac,
-    etm: bool,
-}
-
-impl UmacMac {
-    fn tag(&self, seq: u32, msg: &[u8], out: &mut [u8]) {
-        let nonce = u64::from(seq).to_be_bytes();
-        match self.keyed.clone() {
-            Umac::U64(mut u) => {
-                u.update(msg);
-                out.copy_from_slice(&u.finalize(&nonce));
-            }
-            Umac::U128(mut u) => {
-                u.update(msg);
-                out.copy_from_slice(&u.finalize(&nonce));
-            }
-        }
-    }
-}
-
-impl SshMac for UmacMac {
-    fn tag_len(&self) -> usize {
-        match self.keyed {
-            Umac::U64(_) => 8,
-            Umac::U128(_) => 16,
-        }
-    }
-
-    fn etm(&self) -> bool {
-        self.etm
-    }
-
-    fn compute(&self, seq: u32, msg: &[u8], out: &mut [u8]) -> Result<()> {
-        if out.len() != self.tag_len() {
-            return Err(Error::Crypto("umac: tag buffer has the wrong length"));
-        }
-        self.tag(seq, msg, out);
-        Ok(())
-    }
-
-    fn verify(&self, seq: u32, msg: &[u8], tag: &[u8]) -> Result<()> {
-        let mut want = [0u8; 16];
-        let want = &mut want[..self.tag_len()];
-        self.tag(seq, msg, want);
-        if ct_eq(want, tag) {
-            Ok(())
-        } else {
-            Err(Error::BadMac)
-        }
-    }
-}
-
 /// Construct an [`SshMac`] for the negotiated `name`, keyed with `key`.
 ///
 /// Returns `None` if the name is unknown or if `key.len()` does not match
@@ -243,15 +176,6 @@ pub fn mac_by_name(name: &str, key: &[u8]) -> Option<Box<dyn SshMac + Send + Syn
             tag_len,
             etm,
         }),
-        "umac-64" | "umac-64@openssh.com" | "umac-128" | "umac-128@openssh.com" => {
-            let k: &[u8; 16] = key.try_into().ok()?;
-            let keyed = if base.starts_with("umac-64") {
-                Umac::U64(Box::new(Umac64::new(k)))
-            } else {
-                Umac::U128(Box::new(Umac128::new(k)))
-            };
-            Box::new(UmacMac { keyed, etm })
-        }
         _ => return None,
     })
 }
