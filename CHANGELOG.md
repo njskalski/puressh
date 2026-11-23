@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   facade; the `purecrypto` dependency is gone. `.cargo/config.toml` pins
   every crate to its portable software backend so no CPU-intrinsic (`unsafe`)
   code paths are compiled. The OS RNG reads `/dev/urandom` through `std`
-  instead of calling `getrandom(2)`.
+  instead of calling `getrandom(2)`, after reading one byte of `/dev/random`
+  per process so that it never runs ahead of the kernel's first seeding.
+  Unix only: there is no FFI-free random source on Windows, so this branch
+  does not run there.
 - *(crypto)* Ed25519 verification is strict (canonical encodings, no
   small-order public keys); RSA public exponents are additionally capped at
   2^33 by the backend; ECDSA keys and signatures are parsed by the curve

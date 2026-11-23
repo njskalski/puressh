@@ -1,5 +1,5 @@
 //! Key derivation: PBKDF2, bcrypt_pbkdf and HKDF, from the RustCrypto
-//! [`pbkdf2`], [`bcrypt_pbkdf`] and [`hkdf`] crates.
+//! [`pbkdf2`](mod@pbkdf2), [`bcrypt_pbkdf`](mod@bcrypt_pbkdf) and [`hkdf`] crates.
 
 use alloc::vec::Vec;
 

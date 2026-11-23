@@ -1,8 +1,9 @@
 //! Random number generation.
 //!
 //! [`OsRng`] is the operating system's CSPRNG, read from `/dev/urandom`
-//! with plain `std::fs` so that no foreign function is involved (it needs
-//! the `std` feature). The traits are [`rand_core`]'s: [`RngCore`] is what every
+//! (after one seeding wait on `/dev/random`) with plain `std::fs` so that no
+//! foreign function is involved (it needs the `std` feature). The traits are
+//! [`rand_core`]'s: [`RngCore`] is what every
 //! `generate`-style function in this crate takes, [`CryptoRng`] marks the
 //! generators fit for key material. Both are implemented for `OsRng`, so a
 //! `&mut OsRng` can be passed wherever the dalek, RustCrypto or puressh APIs
@@ -18,21 +19,47 @@ pub use rand_core::{CryptoRng, Rng as RngCore, TryCryptoRng, TryRng};
 use digest::block_api::EagerHash;
 use digest::{KeyInit, Mac, Output};
 
-/// The operating system's random source: `/dev/urandom`.
+/// The operating system's random source: `/dev/urandom`, after waiting once
+/// for the kernel generator to be seeded.
 ///
-/// Failure to read it is treated as fatal: there is no safe way to continue
-/// a key exchange without randomness, so `fill_bytes` panics the way the
-/// `rand` crate's `OsRng` does. Linux has fed `/dev/urandom` from the same
-/// pool as `getrandom(2)` since 5.6, and every other supported Unix either
-/// does the same or never blocks on it, so reading the device is equivalent
-/// to the system call without the foreign call.
+/// `/dev/urandom` never blocks, not even in the first moments after boot
+/// when the kernel has not gathered any entropy yet (a freshly cloned VM, an
+/// embedded board). `getrandom(2)` closes that window by blocking until the
+/// pool is seeded; calling it needs a foreign function, which this crate
+/// does without. Reading `/dev/random` gives the same guarantee through
+/// plain file I/O, so the first use in a process reads one byte from it and
+/// every later read goes to `/dev/urandom`. On Linux 5.6 and later that byte
+/// returns at once when the pool is seeded; older kernels may make it wait a
+/// moment for their entropy estimate, once per process. A system without
+/// `/dev/random` (a minimal chroot) skips the wait.
+///
+/// Failure to read `/dev/urandom` is treated as fatal: there is no safe way
+/// to continue a key exchange without randomness, so `fill_bytes` panics the
+/// way the `rand` crate's `OsRng` does. Only Unix-like systems have these
+/// devices; elsewhere there is no FFI-free source and the first use panics.
 #[cfg(feature = "std")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OsRng;
 
+/// Blocks until the kernel generator has been seeded, once per process.
+#[cfg(feature = "std")]
+fn wait_for_seeded_pool() {
+    use std::io::Read;
+    static SEEDED: std::sync::Once = std::sync::Once::new();
+    SEEDED.call_once(|| {
+        // Best effort: a missing or unreadable `/dev/random` must not stop
+        // a process that `/dev/urandom` can still serve.
+        if let Ok(mut f) = std::fs::File::open("/dev/random") {
+            let mut b = [0u8; 1];
+            let _ = f.read_exact(&mut b);
+        }
+    });
+}
+
 #[cfg(feature = "std")]
 fn fill_from_os(dst: &mut [u8]) {
     use std::io::Read;
+    wait_for_seeded_pool();
     std::thread_local! {
         static URANDOM: core::cell::RefCell<Option<std::fs::File>> =
             const { core::cell::RefCell::new(None) };
