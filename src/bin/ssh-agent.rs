@@ -887,6 +887,17 @@ mod imp {
             }
         }
 
+        /// Only seen with `-d` (or when run in the foreground): the client
+        /// is told just "agent refused operation".
+        fn failed(&self, key: &puressh::key::PrivateKey, error: &puressh::Error) {
+            let pk = key.public_key();
+            eprintln!(
+                "ssh-agent: signing with {} key {} failed: {error}",
+                pk.type_label(),
+                pk.sha256_fingerprint()
+            );
+        }
+
         fn pin(
             &self,
             key: &puressh::key::PrivateKey,
@@ -1042,11 +1053,13 @@ mod imp {
         let state = Arc::new(Mutex::new(state));
 
         if o.foreground {
+            // Before the socket is announced: whoever reads these lines may
+            // signal the agent at once, and it must still remove its socket.
+            install_signals();
             if let Some(s) = &sock {
                 print!("{}", env_lines(&o, s, None, std::process::id()));
                 let _ = std::io::stdout().flush();
             }
-            install_signals();
             serve(listener, state, o.debug, None);
             cleanup_all();
             return Ok(0);
@@ -1056,7 +1069,32 @@ mod imp {
         // SAFETY: single-threaded at this point; both branches continue
         // with ordinary code.
         let parent_pid = std::process::id() as i32;
-        match unsafe { libc::fork() } {
+        // Hold the agent's signals across the fork: the parent announces the
+        // child's pid at once, and a signal sent before the child has its
+        // handlers would kill it with the socket left behind. The child
+        // lets them through once the handlers are in; the parent restores
+        // its mask right away, so a command it execs inherits nothing.
+        // SAFETY: sigset_t is plain data, initialised by sigemptyset.
+        let old_mask = unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            let mut old: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP, libc::SIGUSR1] {
+                libc::sigaddset(&mut set, sig);
+            }
+            libc::sigprocmask(libc::SIG_BLOCK, &set, &mut old);
+            old
+        };
+        let restore_mask = || {
+            // SAFETY: a mask sigprocmask itself returned.
+            unsafe { libc::sigprocmask(libc::SIG_SETMASK, &old_mask, std::ptr::null_mut()) };
+        };
+        // SAFETY: single-threaded, as above.
+        let forked = unsafe { libc::fork() };
+        if forked != 0 {
+            restore_mask();
+        }
+        match forked {
             -1 => Err(Exit::Fail(format!(
                 "fork: {}",
                 strerror(&std::io::Error::last_os_error())
@@ -1080,6 +1118,7 @@ mod imp {
                     }
                 }
                 install_signals();
+                restore_mask();
                 let watch = (!o.command.is_empty()).then_some(parent_pid);
                 serve(listener, state, o.debug, watch);
                 cleanup_all();

@@ -8,10 +8,12 @@
 A pure-Rust [SSH](https://datatracker.ietf.org/doc/html/rfc4251) (Secure Shell)
 protocol library and CLI suite, in the spirit of [libssh](https://www.libssh.org/),
 built on the [RustCrypto](https://github.com/RustCrypto) crates and the
-dalek curves for every cryptographic primitive. No C dependencies, no FFI in
-the dependency tree, and no `unsafe` in the library itself (the optional
-`ffi`, `security-key` and `pkcs11` features are the only places `unsafe`
-appears, for the C ABI surface and for loading provider libraries at run time).
+dalek curves for every cryptographic primitive. No C dependencies and no FFI in
+the dependency tree. `unsafe` appears in the library only where it talks to
+foreign code: the optional `ffi` feature (the C ABI surface) and the
+`security-key` and `pkcs11` modules, which load a FIDO provider or a PKCS#11
+module at run time. With those three features off, the crate is
+`#![forbid(unsafe_code)]`.
 
 > **Status: functional, pre-1.0.** Client, server, SFTP, SCP, port/agent/X11
 > and Unix-socket (StreamLocal) forwarding, `known_hosts`, and `ssh_config`
@@ -127,7 +129,7 @@ cargo add puressh --features server
 | `pam`          | no      | PAM session integration for `sshd` (Linux only, libpam loaded at run time); implies `server` |
 | `multichannel` | yes     | Concurrent multi-channel client (`SharedClient`, `SftpSession`) |
 | `knock`        | yes     | Stealth UDP knock rendezvous in front of SSH (puressh-only, see [`docs/knock.md`](docs/knock.md)) |
-| `security-key` | yes     | FIDO security keys (`sk-ecdsa`, `sk-ed25519`): signing, enrolment and resident keys through a `SecurityKeyProvider` library or `internal` (libfido2), loaded at run time. Verifying their signatures needs no feature |
+| `security-key` | yes     | FIDO security keys (`sk-ecdsa`, `sk-ed25519`): signing, enrolment and resident keys through a `SecurityKeyProvider` library or `internal` (libfido2, which on Windows also reaches keys through Windows Hello), loaded at run time. Verifying their signatures needs no feature |
 | `pkcs11`       | yes     | PKCS#11 tokens (`PKCS11Provider`, `ssh -I`, `ssh-keygen -D`, `ssh-add -s`), the module loaded at run time |
 | `agent`        | no      | Agent daemon side (`agent::AgentState`, the `ssh-agent` binary); pulls in `nix` on Unix. The agent client is always available |
 | `async`        | no      | Runtime-agnostic async frontends (`AsyncClient`, `AsyncServerConnection`) over `futures_io` |
@@ -229,8 +231,10 @@ All of them understand `ssh_config` (including `Match` blocks and `Include`),
 ([`docs/knock.md`](docs/knock.md)). With `KnockListen` set, `sshd` keeps no TCP port visibly open: an authorized key sends one signed UDP
 datagram, and the server opens a one-shot TCP listener for that client only.
 The SSH session that follows is ordinary, including full user
-authentication. `ssh` knocks automatically when the TCP connect is refused or
-slow (`KnockMode auto`).
+authentication. `ssh` knocks only for hosts configured with `KnockMode auto`
+(when the TCP connect is refused or slow) or `KnockMode always`: a knock
+carries the user name and key fingerprint in the clear, so it is never sent
+to a host that was not set up for it.
 
 ## Module layout
 

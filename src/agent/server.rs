@@ -110,6 +110,11 @@ struct Bind {
 /// Most bindings one connection may record, longest session ID, most
 /// destination constraints per key, longest user pattern (OpenSSH's).
 const MAX_SESSION_IDS: usize = 16;
+/// Identities held at once. Adding is allowed over a forwarded connection
+/// (as in OpenSSH), so a remote host could otherwise grow the agent
+/// without bound and, past the 1024 entries the agent client reads, break
+/// every `ssh` that lists the agent's keys.
+const MAX_IDENTITIES: usize = 1024;
 const MAX_SID_LEN: usize = 128;
 const MAX_DEST_CONSTRAINTS: usize = 1024;
 const MAX_USER_PATTERN: usize = 256;
@@ -546,11 +551,17 @@ impl AgentState {
     #[cfg(feature = "security-key")]
     fn sign_security_key(&self, held: &Held, data: &[u8]) -> Option<Vec<u8>> {
         use crate::hostkey::HostKey;
-        let provider = crate::sk::open_provider(held.sk_provider.as_deref()?).ok()?;
-        crate::sk::SkSigner::new(held.key.soft()?.clone(), provider, self.sk_prompt.clone())
-            .ok()?
-            .sign(data)
-            .ok()
+        let key = held.key.soft()?;
+        let res = (|| {
+            let provider = crate::sk::open_provider(held.sk_provider.as_deref().unwrap_or(""))?;
+            crate::sk::SkSigner::new(key.clone(), provider, self.sk_prompt.clone())?.sign(data)
+        })();
+        res.inspect_err(|e| {
+            if let Some(p) = &self.sk_prompt {
+                p.failed(key, e);
+            }
+        })
+        .ok()
     }
 
     #[cfg(not(feature = "security-key"))]
@@ -619,6 +630,8 @@ impl AgentState {
                 return false;
             }
             self.keys.remove(i);
+        } else if self.keys.len() >= MAX_IDENTITIES {
+            return false;
         }
         self.keys.push(held);
         true
@@ -1124,6 +1137,31 @@ mod tests {
             s.handle(&with_provider(&fixture("u_ed25519"), "internal"))[0],
             SSH_AGENT_FAILURE
         );
+    }
+
+    /// A forwarded host may add keys; it cannot add them without end.
+    #[test]
+    fn held_identities_are_capped() {
+        use crate::crypto::rng::OsRng;
+        let mut s = AgentState::new();
+        for i in 0..MAX_IDENTITIES {
+            let k = PrivateKey::generate_ed25519(&mut OsRng, format!("k{i}"));
+            assert_eq!(add(&mut s, &k), SSH_AGENT_SUCCESS, "key {i}");
+        }
+        let extra = PrivateKey::generate_ed25519(&mut OsRng, "extra".into());
+        assert_eq!(add(&mut s, &extra), SSH_AGENT_FAILURE);
+        assert_eq!(s.keys.len(), MAX_IDENTITIES);
+        // Re-adding a held key (to change its constraints, say) replaces it
+        // and is not refused by the cap.
+        let first = fixture("u_ed25519");
+        let mut s = AgentState::new();
+        assert_eq!(add(&mut s, &first), SSH_AGENT_SUCCESS);
+        for i in 1..MAX_IDENTITIES {
+            let k = PrivateKey::generate_ed25519(&mut OsRng, format!("k{i}"));
+            assert_eq!(add(&mut s, &k), SSH_AGENT_SUCCESS, "key {i}");
+        }
+        assert_eq!(add(&mut s, &first), SSH_AGENT_SUCCESS);
+        assert_eq!(s.keys.len(), MAX_IDENTITIES);
     }
 
     fn add(state: &mut AgentState, key: &PrivateKey) -> u8 {

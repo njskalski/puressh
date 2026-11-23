@@ -25,7 +25,6 @@ use crate::hostkey::sk::{SK_ECDSA, SK_ED25519};
 use crate::key::{PrivateKey, SkCredential};
 
 mod external;
-#[cfg(not(windows))]
 mod fido2;
 
 pub use external::ExternalProvider;
@@ -247,12 +246,7 @@ pub fn open_provider(path: &str) -> core::result::Result<Arc<dyn Provider>, SkEr
         ));
     }
     if path.eq_ignore_ascii_case("internal") {
-        #[cfg(not(windows))]
         return Ok(Arc::new(fido2::Fido2Provider::open()?));
-        #[cfg(windows)]
-        return Err(SkError::Provider(
-            "internal security key support not enabled".into(),
-        ));
     }
     Ok(Arc::new(ExternalProvider::open(path)?))
 }
@@ -516,6 +510,13 @@ pub trait Prompt: Send + Sync {
     /// The signature is made (or failed): close what [`Self::touch`]
     /// opened, if anything.
     fn done(&self) {}
+    /// Signing with `key` failed, for `error` (the provider could not be
+    /// loaded, no authenticator, ...): tell the user why, where only a
+    /// failure would reach them otherwise (an agent's client sees just a
+    /// refusal). Not called by [`SkSigner`], whose caller gets the error.
+    fn failed(&self, key: &PrivateKey, error: &Error) {
+        let _ = (key, error);
+    }
 }
 
 /// A [`HostKey`](crate::hostkey::HostKey) whose signatures the
